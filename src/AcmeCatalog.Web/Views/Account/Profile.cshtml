@@ -1,0 +1,29 @@
+@model IdentityUser
+@{
+    ViewData["Title"] = "Account";
+}
+
+<div class="auth-shell">
+    <div class="auth-card" data-testid="profile-card">
+        <div class="auth-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path></svg>
+        </div>
+        <h1 class="h3 mb-1">Your account</h1>
+        <p class="text-muted mb-4">Signed in with ASP.NET Core Identity.</p>
+
+        <dl class="row mb-4">
+            <dt class="col-4 text-muted fw-normal">Username</dt>
+            <dd class="col-8" data-testid="profile-username">@Model.UserName</dd>
+            <dt class="col-4 text-muted fw-normal">Email</dt>
+            <dd class="col-8" data-testid="profile-email">@Model.Email</dd>
+        </dl>
+
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-secondary flex-fill" asp-controller="Items" asp-action="Index">Browse Catalog</a>
+            <form asp-controller="Account" asp-action="Logout" method="post" class="flex-fill">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-primary w-100" data-testid="profile-logout-btn">Log out</button>
+            </form>
+        </div>
+    </div>
+</div>

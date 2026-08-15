@@ -1,0 +1,42 @@
+## .NET
+bin/
+obj/
+*.user
+
+## Solution/build artifacts
+TestResults/
+*.trx
+
+## SQLite database
+*.db
+*.db-shm
+*.db-wal
+
+## Uploaded files (user content, not source)
+src/AcmeCatalog.Web/wwwroot/uploads/*
+!src/AcmeCatalog.Web/wwwroot/uploads/.gitkeep
+
+## OS / editor
+.DS_Store
+.vs/
+.vscode/
+*.swp
+
+## Claude Code local settings (machine-specific, not shared)
+.claude/settings.local.json
+
+## Secrets / local env overrides
+appsettings.*.local.json
+*.env
+.env
+
+## Node (future Cypress phase)
+node_modules/
+npm-debug.log*
+cypress/videos/
+cypress/screenshots/
+cypress/downloads/
+
+## JMeter (future performance-test phase)
+*.jtl
+jmeter.log

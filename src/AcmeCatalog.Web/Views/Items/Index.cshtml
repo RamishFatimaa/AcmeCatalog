@@ -1,0 +1,94 @@
+@model AcmeCatalog.Web.ViewModels.ItemsIndexViewModel
+@{
+    ViewData["Title"] = "Catalog";
+}
+
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-3">
+    <div>
+        <div class="section-eyebrow">The full catalog</div>
+        <h1 class="mb-1">Browse &amp; manage items</h1>
+        <p class="text-muted mb-0">Search, filter by category, or drag cards to reorder the whole collection.</p>
+    </div>
+    <a class="btn btn-primary" asp-action="Create" data-testid="add-item-btn">+ Add Item</a>
+</div>
+
+<div class="catalog-toolbar mb-3" id="filter-bar">
+    <div class="row g-3 align-items-end">
+        <div class="col-md-5">
+            <label for="search-input" class="form-label">Search</label>
+            <input type="text" id="search-input" class="form-control" placeholder="Search by name or description..." autocomplete="off" data-testid="search-input" />
+        </div>
+        <div class="col-md-4">
+            <label for="category-select" class="form-label">Category</label>
+            <select id="category-select" class="form-select" data-testid="category-filter">
+                <option value="">All Categories</option>
+                @foreach (var cat in Model.AllCategories)
+                {
+                    <option value="@cat">@cat</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-3">
+            <button type="button" id="clear-filters-btn" class="btn btn-outline-secondary w-100" data-testid="clear-filters-btn">Clear Filters</button>
+        </div>
+    </div>
+</div>
+
+<div id="filter-status" class="text-muted small mb-3" aria-live="polite" data-testid="filter-status"></div>
+
+<div class="row g-4" id="items-container" data-testid="items-container">
+    @await Html.PartialAsync("_ItemCardsPartial", Model.Items)
+</div>
+
+<div class="text-center my-4" id="load-more-wrapper" style="@(Model.HasMore ? "" : "display:none;")">
+    <button type="button" id="load-more-btn" class="btn btn-outline-primary" data-skip="@Model.Items.Count" data-testid="load-more-btn">
+        Load More
+    </button>
+    <div id="load-more-spinner" class="spinner-border text-primary mt-2" role="status" style="display:none;" data-testid="load-more-spinner">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+</div>
+
+<!-- Quick View Modal -->
+<div class="modal fade" id="quickViewModal" tabindex="-1" aria-labelledby="quickViewModalLabel" aria-hidden="true" data-testid="quick-view-modal">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="quickViewModalLabel">Quick View</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="quickViewModalBody" data-testid="quick-view-body">
+                <div class="text-center py-4">
+                    <div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true" data-testid="delete-modal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form id="deleteConfirmForm" method="post" asp-controller="Items" asp-action="Delete">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="id" id="delete-item-id" value="" />
+                <div class="modal-header">
+                    <h5 class="modal-title" id="deleteConfirmModalLabel">Delete Item</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    Are you sure you want to delete <strong id="delete-item-name" data-testid="delete-item-name"></strong>? This can't be undone.
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger" data-testid="confirm-delete-btn">Delete</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/catalog.js" asp-append-version="true"></script>
+}

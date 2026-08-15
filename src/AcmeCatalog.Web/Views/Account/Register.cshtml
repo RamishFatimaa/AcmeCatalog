@@ -1,0 +1,54 @@
+@model RegisterViewModel
+@{
+    ViewData["Title"] = "Sign Up";
+}
+
+<div class="auth-shell">
+    <div class="auth-card">
+        <div class="auth-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
+        </div>
+        <h1 class="h3 mb-1">Create your account</h1>
+        <p class="text-muted mb-4">Sign up to add, edit, and reorganize the catalog.</p>
+
+        <form asp-controller="Account" asp-action="Register" method="post" novalidate data-testid="register-form">
+            <input type="hidden" asp-for="ReturnUrl" />
+            <div asp-validation-summary="ModelOnly" class="alert alert-danger" data-testid="register-error-summary"></div>
+
+            <div class="mb-3">
+                <label asp-for="Username" class="form-label"></label>
+                <input asp-for="Username" class="form-control" autocomplete="username" data-testid="register-username-input" />
+                <span asp-validation-for="Username" class="text-danger" data-testid="register-username-error"></span>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Email" class="form-label"></label>
+                <input asp-for="Email" class="form-control" autocomplete="email" data-testid="register-email-input" />
+                <span asp-validation-for="Email" class="text-danger" data-testid="register-email-error"></span>
+            </div>
+
+            <div class="mb-3">
+                <label asp-for="Password" class="form-label"></label>
+                <input asp-for="Password" class="form-control" autocomplete="new-password" data-testid="register-password-input" />
+                <span asp-validation-for="Password" class="text-danger" data-testid="register-password-error"></span>
+            </div>
+
+            <div class="mb-4">
+                <label asp-for="ConfirmPassword" class="form-label"></label>
+                <input asp-for="ConfirmPassword" class="form-control" autocomplete="new-password" data-testid="register-confirm-password-input" />
+                <span asp-validation-for="ConfirmPassword" class="text-danger" data-testid="register-confirm-password-error"></span>
+            </div>
+
+            <button type="submit" class="btn btn-primary w-100" data-testid="register-submit-btn">Create Account</button>
+        </form>
+
+        <p class="text-center text-muted mt-4 mb-0">
+            Already have an account?
+            <a asp-controller="Account" asp-action="Login" asp-route-returnUrl="@Model.ReturnUrl" data-testid="register-login-link">Log in</a>
+        </p>
+    </div>
+</div>
+
+@section Scripts {
+    @{await Html.RenderPartialAsync("_ValidationScriptsPartial");}
+}

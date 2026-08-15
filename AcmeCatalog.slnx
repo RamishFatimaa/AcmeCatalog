@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AcmeCatalog.Core/AcmeCatalog.Core.csproj" />
+    <Project Path="src/AcmeCatalog.Infrastructure/AcmeCatalog.Infrastructure.csproj" />
+    <Project Path="src/AcmeCatalog.Web/AcmeCatalog.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AcmeCatalog.Tests/AcmeCatalog.Tests.csproj" />
+  </Folder>
+</Solution>

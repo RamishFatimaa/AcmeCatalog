@@ -1,0 +1,16 @@
+@model AcmeCatalog.Core.Models.Item
+
+<div class="row g-3">
+    <div class="col-md-5">
+        <iframe title="@Model.Name image preview" src="/Items/ImagePreview/@Model.Id"
+                style="width:100%; min-height:220px; border:0; border-radius: 0.5rem;"
+                data-testid="quick-view-image-frame"></iframe>
+    </div>
+    <div class="col-md-7">
+        <h4 data-testid="quick-view-name">@Model.Name</h4>
+        <span class="@CategoryStyleHelper.GetBadgeClass(Model.Category) mb-2" data-testid="quick-view-category">@Model.Category</span>
+        <p class="fs-5 fw-bold item-price" data-testid="quick-view-price">@Model.Price.ToString("C")</p>
+        <p data-testid="quick-view-description">@Model.Description</p>
+        <a class="btn btn-primary btn-sm" asp-controller="Items" asp-action="Details" asp-route-id="@Model.Id">View Full Details</a>
+    </div>
+</div>

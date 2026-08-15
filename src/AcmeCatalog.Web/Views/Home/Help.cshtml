@@ -1,0 +1,68 @@
+@{
+    ViewData["Title"] = "Help";
+}
+
+<div class="section-eyebrow">Support</div>
+<h1 class="mb-2">Help &amp; FAQ</h1>
+<p class="text-muted">Everything below the divider is embedded from a separate static document via an iframe.</p>
+
+<iframe id="help-frame"
+        title="AcmeCatalog Help Content"
+        src="/help-content.html"
+        class="rounded-4 shadow-sm"
+        style="width: 100%; min-height: 320px; border: 1px solid var(--brand-border);">
+</iframe>
+
+<h2 class="mt-5">Frequently Asked Questions</h2>
+<div class="accordion" id="faq-accordion">
+    <div class="accordion-item">
+        <h2 class="accordion-header">
+            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#faq-1" aria-expanded="true" aria-controls="faq-1">
+                Does reordering items persist?
+            </button>
+        </h2>
+        <div id="faq-1" class="accordion-collapse collapse show" data-bs-parent="#faq-accordion">
+            <div class="accordion-body">
+                Yes. Dragging a card on the Catalog page saves the new order to the database immediately, no save button required.
+            </div>
+        </div>
+    </div>
+    <div class="accordion-item">
+        <h2 class="accordion-header">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq-2" aria-expanded="false" aria-controls="faq-2">
+                What image formats can I upload?
+            </button>
+        </h2>
+        <div id="faq-2" class="accordion-collapse collapse" data-bs-parent="#faq-accordion">
+            <div class="accordion-body">
+                Any standard web image format (JPEG, PNG, GIF, WebP). You can also skip the upload and paste an image URL instead.
+            </div>
+        </div>
+    </div>
+    <div class="accordion-item">
+        <h2 class="accordion-header">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq-3" aria-expanded="false" aria-controls="faq-3">
+                Is there an API I can call directly?
+            </button>
+        </h2>
+        <div id="faq-3" class="accordion-collapse collapse" data-bs-parent="#faq-accordion">
+            <div class="accordion-body">
+                Yes &mdash; a REST API is available at <code>/api/items</code> supporting GET, POST, PUT, and DELETE.
+                Full interactive docs live at <a href="/swagger">/swagger</a>.
+            </div>
+        </div>
+    </div>
+    <div class="accordion-item">
+        <h2 class="accordion-header">
+            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq-4" aria-expanded="false" aria-controls="faq-4">
+                Do I need an account?
+            </button>
+        </h2>
+        <div id="faq-4" class="accordion-collapse collapse" data-bs-parent="#faq-accordion">
+            <div class="accordion-body">
+                Browsing, searching, and viewing items is open to everyone. Adding, editing, deleting, or
+                reordering items requires a free account &mdash; <a asp-controller="Account" asp-action="Register">sign up here</a>.
+            </div>
+        </div>
+    </div>
+</div>
