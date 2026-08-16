@@ -4,14 +4,15 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-     "e2e": "cypress run",
-     "e2e:open": "cypress open"
+    "e2e": "cypress run",
+    "e2e:open": "cypress open"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "devDependencies": {
-    "cypress": "^15.20.1"
+    "cypress": "^15.20.1",
+    "mocha-junit-reporter": "^2.2.1"
   }
 }
