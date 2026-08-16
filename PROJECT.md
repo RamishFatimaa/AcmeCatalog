@@ -174,6 +174,26 @@ dotnet run --project src/AcmeCatalog.Web   # http://localhost:5274, Swagger at /
 dotnet test tests/AcmeCatalog.Tests/AcmeCatalog.Tests.csproj --logger "trx;LogFileName=results.trx" --results-directory ./TestResults
 ```
 
+#### One-command setup
+
+`scripts/setup.sh` (macOS/Linux) and `scripts/setup.ps1` (Windows) automate the
+above end to end: install the .NET SDK / Node if missing, build the solution,
+run the NUnit suite, install the Cypress deps, start the app in the
+background, and run the Cypress E2E suite against it. Both are safe to
+re-run — they leave an existing `acmecatalog.db` in place (the app
+creates/seeds it itself on first startup) and reuse port 5274.
+
+```bash
+# macOS/Linux
+./scripts/setup.sh
+
+# Windows (PowerShell)
+./scripts/setup.ps1
+```
+
+When it finishes, the app stays running at http://localhost:5274 (demo login:
+`testuser` / `Test123!`); the script prints the PID to stop it.
+
 ## Verification results
 
 Everything below was confirmed against the **running app via real HTTP requests**

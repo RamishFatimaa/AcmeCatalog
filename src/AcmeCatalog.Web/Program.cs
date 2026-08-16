@@ -4,11 +4,13 @@ using AcmeCatalog.Core.Interfaces;
 using AcmeCatalog.Infrastructure.Data;
 using AcmeCatalog.Infrastructure.Services;
 using AcmeCatalog.Web.Security;
+using AcmeCatalog.Web.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 
@@ -24,6 +26,15 @@ builder.Services.AddDbContext<AcmeCatalogDbContext>(options =>
     options.UseSqlite(connectionString));
 
 builder.Services.AddScoped<IItemService, ItemService>();
+
+// Where uploaded item images are saved. Defaults to wwwroot/uploads for local dev.
+// On Azure App Service, deployments are served from a read-only package mount, so
+// production overrides this (via the Storage__UploadsPath app setting) to a path
+// under /home, the one directory that's writable and persists across restarts.
+var uploadsPath = builder.Configuration["Storage:UploadsPath"]
+    ?? Path.Combine(builder.Environment.WebRootPath, "uploads");
+Directory.CreateDirectory(uploadsPath);
+builder.Services.AddSingleton(new UploadsPathOptions(uploadsPath));
 
 // ASP.NET Core Identity powers the cookie-authenticated MVC pages (Login/Register/Account).
 builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
@@ -167,16 +178,24 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-if (app.Environment.IsDevelopment())
+// Swagger stays available in every environment (including the deployed instance) —
+// it's just API documentation, not a secrets/debug surface.
+app.UseSwagger();
+app.UseSwaggerUI(options =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(options =>
-    {
-        options.SwaggerEndpoint("/swagger/v1/swagger.json", "AcmeCatalog API v1");
-    });
-}
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "AcmeCatalog API v1");
+});
 
 app.UseHttpsRedirection();
+
+// Serves uploaded item images from the resolved uploads path (see registration above),
+// which may live outside wwwroot in production.
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(uploadsPath),
+    RequestPath = "/uploads"
+});
+
 app.UseRouting();
 
 app.UseAuthentication();

@@ -7,6 +7,10 @@ obj/
 TestResults/
 *.trx
 
+## Local dev server logs (written by scripts/setup.sh / setup.ps1)
+app.log
+app.err.log
+
 ## SQLite database
 *.db
 *.db-shm
@@ -36,6 +40,7 @@ npm-debug.log*
 cypress/videos/
 cypress/screenshots/
 cypress/downloads/
+cypress/results/
 
 ## JMeter (future performance-test phase)
 *.jtl
