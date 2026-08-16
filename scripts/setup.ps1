@@ -91,7 +91,9 @@ if ($existing) {
 }
 
 Write-Host "==> Starting AcmeCatalog.Web in the background..."
-Remove-Item -Path (Join-Path $WebProject "acmecatalog.db*") -ErrorAction SilentlyContinue
+# The app creates/migrates acmecatalog.db and seeds demo data itself on startup
+# (DbSeeder/IdentitySeeder are no-ops if data already exists), so we leave any
+# existing DB in place rather than wiping it on every re-run.
 $env:ASPNETCORE_ENVIRONMENT = "Development"
 $logFile = Join-Path $RepoRoot "app.log"
 $appProcess = Start-Process -FilePath "dotnet" `

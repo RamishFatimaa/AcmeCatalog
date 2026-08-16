@@ -88,7 +88,9 @@ if lsof -nP -iTCP:5274 -sTCP:LISTEN -t >/dev/null 2>&1; then
 fi
 
 echo "==> Starting AcmeCatalog.Web in the background..."
-rm -f "$WEB_PROJECT"/acmecatalog.db*
+# The app creates/migrates acmecatalog.db and seeds demo data itself on startup
+# (DbSeeder/IdentitySeeder are no-ops if data already exists), so we leave any
+# existing DB in place rather than wiping it on every re-run.
 (cd "$WEB_PROJECT" && ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-launch-profile --urls "$APP_URL" > "$REPO_ROOT/app.log" 2>&1 &)
 
 echo "==> Waiting for the app to respond..."
