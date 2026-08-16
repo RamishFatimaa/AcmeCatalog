@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [stage]
+  pull_request:
+    branches: [stage]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore AcmeCatalog.slnx
+
+      - name: Build
+        run: dotnet build AcmeCatalog.slnx --no-restore --configuration Release
+
+      - name: Run unit tests
+        run: >
+          dotnet test tests/AcmeCatalog.Tests/AcmeCatalog.Tests.csproj
+          --no-build --configuration Release
+          --logger "trx;LogFileName=results.trx"
+          --results-directory ./TestResults
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: TestResults/
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AcmeCatalog.Web/package-lock.json
+
+      - name: Install Cypress/npm dependencies
+        working-directory: src/AcmeCatalog.Web
+        run: npm ci
+
+      - name: Start app in background
+        working-directory: src/AcmeCatalog.Web
+        run: |
+          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-launch-profile --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5274/health > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App did not become healthy within 30s" >&2
+          cat "$GITHUB_WORKSPACE/app.log"
+          exit 1
+
+      - name: Run Cypress E2E suite
+        working-directory: src/AcmeCatalog.Web
+        run: npx cypress run
+
+      - name: Upload Cypress artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-artifacts
+          path: |
+            src/AcmeCatalog.Web/cypress/screenshots
+            src/AcmeCatalog.Web/cypress/videos
+            app.log
