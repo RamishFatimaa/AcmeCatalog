@@ -7,8 +7,9 @@ obj/
 TestResults/
 *.trx
 
-## Local dev server log (written by scripts/setup.sh / setup.ps1)
+## Local dev server logs (written by scripts/setup.sh / setup.ps1)
 app.log
+app.err.log
 
 ## SQLite database
 *.db

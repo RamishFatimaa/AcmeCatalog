@@ -96,10 +96,13 @@ Write-Host "==> Starting AcmeCatalog.Web in the background..."
 # existing DB in place rather than wiping it on every re-run.
 $env:ASPNETCORE_ENVIRONMENT = "Development"
 $logFile = Join-Path $RepoRoot "app.log"
+$errLogFile = Join-Path $RepoRoot "app.err.log"
+# Start-Process rejects using the same path for both streams, so these must
+# be two distinct files even though dotnet run mostly writes to stdout.
 $appProcess = Start-Process -FilePath "dotnet" `
     -ArgumentList "run", "--no-launch-profile", "--urls", $AppUrl `
     -WorkingDirectory $WebProject `
-    -RedirectStandardOutput $logFile -RedirectStandardError $logFile `
+    -RedirectStandardOutput $logFile -RedirectStandardError $errLogFile `
     -PassThru -WindowStyle Hidden
 
 Write-Host "==> Waiting for the app to respond..."
@@ -113,7 +116,7 @@ for ($i = 0; $i -lt 30; $i++) {
 }
 
 if (-not $ready) {
-    Fail "App didn't come up within 30s. Check $logFile for details."
+    Fail "App didn't come up within 30s. Check $logFile and $errLogFile for details."
 }
 Write-Host "==> App is up at $AppUrl"
 
@@ -138,6 +141,6 @@ Write-Host "Swagger:  $AppUrl/swagger"
 Write-Host "Health:   $AppUrl/health"
 Write-Host "Demo login: testuser / Test123!"
 Write-Host ""
-Write-Host "Logs: $logFile"
+Write-Host "Logs: $logFile (errors: $errLogFile)"
 Write-Host "Stop the app with: Stop-Process -Id $($appProcess.Id)"
 Write-Host "============================================================"
