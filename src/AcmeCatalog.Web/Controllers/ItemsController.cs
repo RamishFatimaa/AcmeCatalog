@@ -1,5 +1,6 @@
 using AcmeCatalog.Core.Interfaces;
 using AcmeCatalog.Core.Models;
+using AcmeCatalog.Web.Storage;
 using AcmeCatalog.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -11,12 +12,12 @@ public class ItemsController : Controller
     private const int PageSize = 4;
 
     private readonly IItemService _itemService;
-    private readonly IWebHostEnvironment _environment;
+    private readonly UploadsPathOptions _uploadsPath;
 
-    public ItemsController(IItemService itemService, IWebHostEnvironment environment)
+    public ItemsController(IItemService itemService, UploadsPathOptions uploadsPath)
     {
         _itemService = itemService;
-        _environment = environment;
+        _uploadsPath = uploadsPath;
     }
 
     // GET /Items
@@ -231,12 +232,11 @@ public class ItemsController : Controller
             return null;
         }
 
-        var uploadsFolder = Path.Combine(_environment.WebRootPath, "uploads");
-        Directory.CreateDirectory(uploadsFolder);
+        Directory.CreateDirectory(_uploadsPath.Path);
 
         var safeExtension = Path.GetExtension(file.FileName);
         var fileName = $"{Guid.NewGuid()}{safeExtension}";
-        var filePath = Path.Combine(uploadsFolder, fileName);
+        var filePath = Path.Combine(_uploadsPath.Path, fileName);
 
         await using (var stream = new FileStream(filePath, FileMode.Create))
         {
