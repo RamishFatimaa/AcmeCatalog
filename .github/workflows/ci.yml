@@ -78,7 +78,9 @@ jobs:
 
       - name: Run Cypress E2E suite
         working-directory: src/AcmeCatalog.Web
-        run: npx cypress run
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+        run: npx cypress run --record
 
       - name: Upload Cypress test results
         if: always()
