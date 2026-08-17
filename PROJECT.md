@@ -194,6 +194,15 @@ creates/seeds it itself on first startup) and reuse port 5274.
 When it finishes, the app stays running at http://localhost:5274 (demo login:
 `testuser` / `Test123!`); the script prints the PID to stop it.
 
+**Windows first-run gotcha:** if PowerShell refuses to run the script at all
+with `running scripts is disabled on this system`, that's its default
+execution policy blocking unsigned `.ps1` files — nothing to do with missing
+dependencies. Run it once with the policy bypassed for that session instead:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+```
+
 ## Verification results
 
 Everything below was confirmed against the **running app via real HTTP requests**
