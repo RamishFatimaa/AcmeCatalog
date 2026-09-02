@@ -20,22 +20,13 @@ public class ItemsController : Controller
         _uploadsPath = uploadsPath;
     }
 
-    // GET /Items
-    public async Task<IActionResult> Index()
+    // GET /Items — Phase 1 of the React migration: this now serves a thin
+    // shell (Views/Items/Index.cshtml) that mounts the React catalog app,
+    // which reads/writes through /api/items and /api/auth directly instead
+    // of the ViewModel this action used to build.
+    public IActionResult Index()
     {
-        var allItems = await _itemService.GetAllAsync();
-        var categories = await _itemService.GetCategoriesAsync();
-
-        var model = new ItemsIndexViewModel
-        {
-            Items = allItems.Take(PageSize).ToList(),
-            AllCategories = categories,
-            TotalCount = allItems.Count,
-            PageSize = PageSize,
-            HasMore = allItems.Count > PageSize
-        };
-
-        return View(model);
+        return View();
     }
 
     // GET /Items/LoadMore?skip=4

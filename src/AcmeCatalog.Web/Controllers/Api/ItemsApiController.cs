@@ -100,4 +100,18 @@ public class ItemsApiController : ControllerBase
     {
         return Ok(await _itemService.GetCategoriesAsync());
     }
+
+    // PUT api/items/reorder
+    [HttpPut("reorder")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<IActionResult> Reorder([FromBody] List<int> orderedIds)
+    {
+        if (orderedIds is null || orderedIds.Count == 0)
+        {
+            return Problem(statusCode: 400, title: "Invalid order", detail: "orderedIds must be a non-empty array.");
+        }
+
+        await _itemService.ReorderAsync(orderedIds);
+        return NoContent();
+    }
 }
