@@ -1,16 +1,6 @@
-
-Cypress.Commands.add('login', (username = 'testuser', password = 'Test123!') => {
-  cy.session([username, password], () => {
-    cy.visit('/Account/Login')
-    cy.get('[data-testid=login-username-input]').type(username)
-    cy.get('[data-testid=login-password-input]').type(password)
-    cy.get('[data-testid=login-submit-btn]').click()
-    cy.url().should('not.include', '/Account/Login')
-  })
-})
-
-// ---- API-level helpers: bypass the UI entirely for setup/teardown, using the
-// real REST endpoints with a JWT bearer token (api/auth + api/items). ----
+// API-level helpers — the whole suite is API-only now (see cypress/e2e/api/),
+// so these use the real REST endpoints directly with a JWT bearer token
+// rather than driving a UI login form.
 
 Cypress.Commands.add('apiLogin', (username = 'testuser', password = 'Test123!') => {
   return cy.request('POST', '/api/auth/login', { username, password })
