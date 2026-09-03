@@ -1,88 +1,73 @@
-import { useState } from 'react'
-import type { Item, ItemInput } from './types'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import type { ReactNode } from 'react'
 import { AuthProvider, useAuth } from './auth/AuthContext'
-import { CatalogGrid } from './components/CatalogGrid'
-import { ItemForm } from './components/ItemForm'
-import { LoginForm } from './components/LoginForm'
-import { createItem, updateItem } from './api/items'
+import { Layout } from './components/Layout'
+import { HomePage } from './pages/HomePage'
+import { HelpPage } from './pages/HelpPage'
+import { ItemsPage } from './pages/ItemsPage'
+import { ItemFormPage } from './pages/ItemFormPage'
+import { LoginPage } from './pages/LoginPage'
+import { RegisterPage } from './pages/RegisterPage'
+import { ProfilePage } from './pages/ProfilePage'
 
-type View = { name: 'catalog' } | { name: 'login' } | { name: 'create' } | { name: 'edit'; item: Item }
+// Mirrors the old [Authorize] MVC attribute: anonymous visitors get sent to
+// the login page, remembering where they were headed via location state so
+// LoginPage (or a future "return here after login" flow) could use it.
+function RequireAuth({ children }: { children: ReactNode }) {
+  const { isAuthenticated } = useAuth()
+  const location = useLocation()
 
-function CatalogPage() {
-  const { isAuthenticated, username, logout, token } = useAuth()
-  const [view, setView] = useState<View>({ name: 'catalog' })
-  const [refreshToken, setRefreshToken] = useState(0)
-
-  async function handleFormSubmit(input: ItemInput) {
-    if (!token) return
-    if (view.name === 'edit') {
-      await updateItem(view.item.id, input, token)
-    } else {
-      await createItem(input, token)
-    }
-    setRefreshToken((n) => n + 1)
-    setView({ name: 'catalog' })
+  if (!isAuthenticated) {
+    return <Navigate to="/Account/Login" state={{ from: location }} replace />
   }
 
+  return children
+}
+
+function AppRoutes() {
   return (
-    <div className="container py-4">
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <h1>AcmeCatalog</h1>
-        <div>
-          {isAuthenticated ? (
-            <>
-              <span className="me-3 text-muted">Signed in as {username}</span>
-              <button
-                type="button"
-                className="btn btn-outline-primary me-2"
-                data-testid="add-item-btn"
-                onClick={() => setView({ name: 'create' })}
-              >
-                + Add Item
-              </button>
-              <button type="button" className="btn btn-link" data-testid="logout-btn" onClick={logout}>
-                Log out
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-outline-primary"
-              data-testid="login-nav-link"
-              onClick={() => setView({ name: 'login' })}
-            >
-              Log in
-            </button>
-          )}
-        </div>
-      </div>
-
-      {view.name === 'catalog' && (
-        <CatalogGrid
-          refreshToken={refreshToken}
-          onEdit={(item) => setView({ name: 'edit', item })}
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={<HomePage />} />
+        <Route path="Items" element={<ItemsPage />} />
+        <Route
+          path="Items/Create"
+          element={
+            <RequireAuth>
+              <ItemFormPage />
+            </RequireAuth>
+          }
         />
-      )}
-
-      {view.name === 'login' && (
-        <LoginForm onSuccess={() => setView({ name: 'catalog' })} />
-      )}
-
-      {(view.name === 'create' || view.name === 'edit') && (
-        <ItemForm
-          initial={view.name === 'edit' ? view.item : undefined}
-          onSubmit={handleFormSubmit}
-          onCancel={() => setView({ name: 'catalog' })}
+        <Route
+          path="Items/Edit/:id"
+          element={
+            <RequireAuth>
+              <ItemFormPage />
+            </RequireAuth>
+          }
         />
-      )}
-    </div>
+        <Route path="Account/Login" element={<LoginPage />} />
+        <Route path="Account/Register" element={<RegisterPage />} />
+        <Route
+          path="Account/Profile"
+          element={
+            <RequireAuth>
+              <ProfilePage />
+            </RequireAuth>
+          }
+        />
+        <Route path="Home/Help" element={<HelpPage />} />
+      </Route>
+    </Routes>
   )
 }
 
 export function App() {
   return (
-    <AuthProvider>
-      <CatalogPage />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
   )
 }

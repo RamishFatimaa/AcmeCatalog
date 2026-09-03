@@ -36,7 +36,11 @@ var uploadsPath = builder.Configuration["Storage:UploadsPath"]
 Directory.CreateDirectory(uploadsPath);
 builder.Services.AddSingleton(new UploadsPathOptions(uploadsPath));
 
-// ASP.NET Core Identity powers the cookie-authenticated MVC pages (Login/Register/Account).
+// ASP.NET Core Identity's UserManager/SignInManager back the JWT-issuing
+// /api/auth endpoints (login/register/me). The cookie scheme it also
+// registers is unused now that Login/Register/Profile are React pages
+// authenticating via JWT instead — kept registered only because
+// AddIdentity() requires a sign-in scheme to exist.
 builder.Services.AddIdentity<IdentityUser, IdentityRole>(options =>
 {
     options.Password.RequiredLength = 6;
@@ -67,6 +71,12 @@ builder.Services.ConfigureApplicationCookie(options =>
         return Task.CompletedTask;
     };
 });
+
+// JwtSecurityTokenHandler remaps short inbound claim types (unique_name,
+// email, sub) to long XML-schema URIs by default, so User.FindFirstValue
+// with the original short names (as AuthApiController's Me() endpoint uses)
+// silently returns null. Disabling that keeps claims exactly as issued.
+System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
 // JWT bearer powers the REST API's protected write endpoints, alongside the cookie scheme above.
 var jwtKey = builder.Configuration["Jwt:Key"]!;
@@ -229,5 +239,13 @@ app.MapHealthChecks("/health", new HealthCheckOptions
         await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
     }
 }).AllowAnonymous();
+
+// Everything else (/, /Items, /Account/Login, /Home/Help, etc.) is now the
+// React app (clientapp/) — React Router handles matching those paths client
+// side. This only ever fires when no other endpoint above already claimed
+// the request, so /api/*, /health, /swagger, static files, and the routes
+// still served by MVC (e.g. Items/ImagePreview, for the same-origin iframe)
+// are unaffected.
+app.MapFallbackToFile("clientapp-dist/index.html");
 
 app.Run();

@@ -20,6 +20,11 @@ export interface LoginResponse {
   username: string
 }
 
+export interface UserResponse {
+  username: string
+  email: string
+}
+
 export interface ProblemDetails {
   title?: string
   detail?: string

@@ -1,40 +1,15 @@
 using System.Diagnostics;
-using AcmeCatalog.Core.Interfaces;
 using AcmeCatalog.Web.Models;
-using AcmeCatalog.Web.ViewModels;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AcmeCatalog.Web.Controllers;
 
+// Index() and Help() moved to the React app (clientapp/) — see
+// Program.cs's MapFallbackToFile. Privacy and Error stay server-rendered:
+// Error in particular is infrastructure (UseExceptionHandler's target),
+// not a content page migrated for its own sake.
 public class HomeController : Controller
 {
-    private readonly IItemService _itemService;
-
-    public HomeController(IItemService itemService)
-    {
-        _itemService = itemService;
-    }
-
-    public async Task<IActionResult> Index()
-    {
-        var items = await _itemService.GetAllAsync();
-        var categories = await _itemService.GetCategoriesAsync();
-
-        var model = new HomeIndexViewModel
-        {
-            ItemCount = items.Count,
-            CategoryCount = categories.Count,
-            LatestItemName = items.OrderByDescending(i => i.DateAdded).FirstOrDefault()?.Name
-        };
-
-        return View(model);
-    }
-
-    public IActionResult Help()
-    {
-        return View();
-    }
-
     public IActionResult Privacy()
     {
         return View();

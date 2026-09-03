@@ -7,6 +7,12 @@ import { defineConfig } from 'vite'
 // paths just resolve same-origin with no proxy involved.
 export default defineConfig({
   plugins: [react()],
+  // The build output lives at wwwroot/clientapp-dist/ (a subdirectory), but
+  // Vite defaults to assuming its bundle is served from the site root, so
+  // its generated index.html referenced /assets/app.js — a 404, since that
+  // file actually lives at /clientapp-dist/assets/app.js. This makes the
+  // generated references match where the files are actually served from.
+  base: '/clientapp-dist/',
   server: {
     proxy: {
       '/api': 'http://localhost:5274',

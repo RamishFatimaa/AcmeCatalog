@@ -1,7 +1,4 @@
 using AcmeCatalog.Core.Interfaces;
-using AcmeCatalog.Core.Models;
-using AcmeCatalog.Web.Storage;
-using AcmeCatalog.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,22 +9,18 @@ public class ItemsController : Controller
     private const int PageSize = 4;
 
     private readonly IItemService _itemService;
-    private readonly UploadsPathOptions _uploadsPath;
 
-    public ItemsController(IItemService itemService, UploadsPathOptions uploadsPath)
+    public ItemsController(IItemService itemService)
     {
         _itemService = itemService;
-        _uploadsPath = uploadsPath;
     }
 
-    // GET /Items — Phase 1 of the React migration: this now serves a thin
-    // shell (Views/Items/Index.cshtml) that mounts the React catalog app,
-    // which reads/writes through /api/items and /api/auth directly instead
-    // of the ViewModel this action used to build.
-    public IActionResult Index()
-    {
-        return View();
-    }
+    // Index() moved to the React app (clientapp/) — see Program.cs's
+    // MapFallbackToFile. LoadMore/Filter/QuickView/Create/Edit/Delete/Reorder
+    // below are no longer linked from the UI either (superseded by /api/items
+    // and /api/items/reorder), but are left as-is for now — cleaning those up
+    // is a separate pass. ImagePreview stays: it's still used directly, as
+    // the iframe src in the React Quick View modal.
 
     // GET /Items/LoadMore?skip=4
     public async Task<IActionResult> LoadMore(int skip = 0)
@@ -85,103 +78,14 @@ public class ItemsController : Controller
         return View(item);
     }
 
-    // GET /Items/Create
-    [Authorize]
-    public IActionResult Create()
-    {
-        return View(new ItemFormViewModel());
-    }
-
-    // POST /Items/Create
-    [HttpPost]
-    [Authorize]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Create(ItemFormViewModel form)
-    {
-        if (!ModelState.IsValid)
-        {
-            return View(form);
-        }
-
-        var imageUrl = await SaveUploadedImageAsync(form.ImageFile) ?? form.ImageUrl;
-
-        var item = new Item
-        {
-            Name = form.Name,
-            Price = form.Price,
-            Description = form.Description,
-            Category = form.Category,
-            ImageUrl = imageUrl
-        };
-
-        await _itemService.CreateAsync(item);
-
-        TempData["ToastMessage"] = $"\"{item.Name}\" was added to the catalog.";
-        TempData["ToastType"] = "success";
-        return RedirectToAction(nameof(Index));
-    }
-
-    // GET /Items/Edit/5
-    [Authorize]
-    public async Task<IActionResult> Edit(int id)
-    {
-        var item = await _itemService.GetByIdAsync(id);
-        if (item is null)
-        {
-            return NotFound();
-        }
-
-        var form = new ItemFormViewModel
-        {
-            Id = item.Id,
-            Name = item.Name,
-            Price = item.Price,
-            Description = item.Description,
-            Category = item.Category,
-            ImageUrl = item.ImageUrl
-        };
-
-        return View(form);
-    }
-
-    // POST /Items/Edit/5
-    [HttpPost]
-    [Authorize]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Edit(int id, ItemFormViewModel form)
-    {
-        if (id != form.Id)
-        {
-            return BadRequest();
-        }
-
-        if (!ModelState.IsValid)
-        {
-            return View(form);
-        }
-
-        var uploadedUrl = await SaveUploadedImageAsync(form.ImageFile);
-
-        var item = new Item
-        {
-            Id = form.Id,
-            Name = form.Name,
-            Price = form.Price,
-            Description = form.Description,
-            Category = form.Category,
-            ImageUrl = uploadedUrl ?? form.ImageUrl
-        };
-
-        var updated = await _itemService.UpdateAsync(item);
-        if (!updated)
-        {
-            return NotFound();
-        }
-
-        TempData["ToastMessage"] = $"\"{item.Name}\" was updated.";
-        TempData["ToastType"] = "success";
-        return RedirectToAction(nameof(Index));
-    }
+    // Create() and Edit() (GET+POST) were removed here, not just left as
+    // dead code like the others above: their routes (/Items/Create,
+    // /Items/Edit/{id}) are exact matches for the new React Router routes,
+    // and conventional MVC routing would keep claiming them first, silently
+    // shadowing React entirely. Confirmed as a real bug by actually hitting
+    // both URLs — JWT-authenticated users got redirected to /Account/Login
+    // because the old [Authorize] here checks cookie auth, which no page
+    // establishes anymore.
 
     // POST /Items/Delete/5
     [HttpPost]
@@ -214,26 +118,5 @@ public class ItemsController : Controller
 
         await _itemService.ReorderAsync(orderedIds);
         return Ok(new { success = true });
-    }
-
-    private async Task<string?> SaveUploadedImageAsync(IFormFile? file)
-    {
-        if (file is null || file.Length == 0)
-        {
-            return null;
-        }
-
-        Directory.CreateDirectory(_uploadsPath.Path);
-
-        var safeExtension = Path.GetExtension(file.FileName);
-        var fileName = $"{Guid.NewGuid()}{safeExtension}";
-        var filePath = Path.Combine(_uploadsPath.Path, fileName);
-
-        await using (var stream = new FileStream(filePath, FileMode.Create))
-        {
-            await file.CopyToAsync(stream);
-        }
-
-        return $"/uploads/{fileName}";
     }
 }

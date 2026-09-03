@@ -1,5 +1,9 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using AcmeCatalog.Web.Dtos;
 using AcmeCatalog.Web.Security;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 
@@ -48,6 +52,57 @@ public class AuthApiController : ControllerBase
             Token = token,
             ExpiresAtUtc = expiresAtUtc,
             Username = user.UserName ?? request.Username
+        });
+    }
+
+    // POST api/auth/register
+    [HttpPost("register")]
+    public async Task<ActionResult<LoginResponse>> Register([FromBody] RegisterRequest request)
+    {
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
+        var user = new IdentityUser { UserName = request.Username, Email = request.Email };
+        var result = await _userManager.CreateAsync(user, request.Password);
+
+        if (!result.Succeeded)
+        {
+            foreach (var error in result.Errors)
+            {
+                ModelState.AddModelError(string.Empty, error.Description);
+            }
+
+            return ValidationProblem(ModelState);
+        }
+
+        // JWT auth is stateless, so "signing in" after registration just means
+        // issuing a token immediately — there's no session to establish.
+        var (token, expiresAtUtc) = _tokenService.GenerateToken(user);
+
+        return Ok(new LoginResponse
+        {
+            Token = token,
+            ExpiresAtUtc = expiresAtUtc,
+            Username = user.UserName ?? request.Username
+        });
+    }
+
+    // GET api/auth/me
+    [HttpGet("me")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public ActionResult<UserResponse> Me()
+    {
+        // Read straight from the validated token's claims — the same ones
+        // JwtTokenService issues — rather than a redundant database lookup.
+        var username = User.FindFirstValue(JwtRegisteredClaimNames.UniqueName);
+        var email = User.FindFirstValue(JwtRegisteredClaimNames.Email);
+
+        return Ok(new UserResponse
+        {
+            Username = username ?? string.Empty,
+            Email = email ?? string.Empty
         });
     }
 }

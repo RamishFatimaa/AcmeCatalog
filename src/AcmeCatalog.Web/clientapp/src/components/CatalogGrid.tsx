@@ -9,10 +9,9 @@ const PAGE_SIZE = 4
 
 interface CatalogGridProps {
   onEdit: (item: Item) => void
-  refreshToken: number
 }
 
-export function CatalogGrid({ onEdit, refreshToken }: CatalogGridProps) {
+export function CatalogGrid({ onEdit }: CatalogGridProps) {
   const { isAuthenticated, token } = useAuth()
 
   const [items, setItems] = useState<Item[]>([])
@@ -36,7 +35,7 @@ export function CatalogGrid({ onEdit, refreshToken }: CatalogGridProps) {
   useEffect(() => {
     const handle = setTimeout(loadItems, term ? 300 : 0)
     return () => clearTimeout(handle)
-  }, [loadItems, refreshToken])
+  }, [loadItems])
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE)

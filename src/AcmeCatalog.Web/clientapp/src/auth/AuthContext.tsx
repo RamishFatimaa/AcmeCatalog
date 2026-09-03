@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
-import { login as loginRequest } from '../api/auth'
+import { login as loginRequest, register as registerRequest } from '../api/auth'
+import type { LoginResponse } from '../types'
 
 const STORAGE_KEY = 'acmecatalog.auth'
 
@@ -14,6 +15,7 @@ interface AuthContextValue {
   username: string | null
   isAuthenticated: boolean
   login: (username: string, password: string) => Promise<void>
+  register: (username: string, email: string, password: string, confirmPassword: string) => Promise<void>
   logout: () => void
 }
 
@@ -38,8 +40,7 @@ function readStoredAuth(): StoredAuth | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<StoredAuth | null>(() => readStoredAuth())
 
-  const login = useCallback(async (username: string, password: string) => {
-    const response = await loginRequest(username, password)
+  function persist(response: LoginResponse) {
     const stored: StoredAuth = {
       token: response.token,
       username: response.username,
@@ -47,7 +48,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(stored))
     setAuth(stored)
+  }
+
+  const login = useCallback(async (username: string, password: string) => {
+    persist(await loginRequest(username, password))
   }, [])
+
+  const register = useCallback(
+    async (username: string, email: string, password: string, confirmPassword: string) => {
+      // JWT auth is stateless, so a successful registration returns a token
+      // directly — the same "sign in immediately after creating the
+      // account" behavior the old cookie-based flow had, just without a
+      // separate sign-in round trip.
+      persist(await registerRequest(username, email, password, confirmPassword))
+    },
+    [],
+  )
 
   const logout = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY)
@@ -61,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         username: auth?.username ?? null,
         isAuthenticated: auth !== null,
         login,
+        register,
         logout,
       }}
     >
