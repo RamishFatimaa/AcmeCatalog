@@ -66,7 +66,7 @@ describe('Catalog management (authenticated)', () => {
     cy.getBySel('no-results').should('be.visible')
   })
 
-  it('reorders items via drag; the persisted request body matches the new order', { tags: '@regression' }, () => {
+  it('reorders items via drag; the persisted request body matches the new order', { tags: '@smoke' }, () => {
     cy.intercept('PUT', '/api/items/reorder').as('reorder')
 
     cy.getBySel('item-card').then(($cards) => {

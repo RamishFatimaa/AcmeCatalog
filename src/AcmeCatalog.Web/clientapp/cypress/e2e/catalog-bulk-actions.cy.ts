@@ -5,7 +5,7 @@ describe('Catalog bulk actions (authenticated)', () => {
     cy.visit('/Items')
   })
 
-  it('checking items shows a running count and a Delete Selected bar', { tags: '@smoke' }, () => {
+  it('checking items shows a running count and a Delete Selected bar', { tags: '@regression' }, () => {
     cy.getBySel('bulk-actions-bar').should('not.exist')
 
     cy.getBySel('select-item-checkbox').eq(0).click()

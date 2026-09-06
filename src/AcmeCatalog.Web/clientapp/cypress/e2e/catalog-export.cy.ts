@@ -4,7 +4,7 @@ describe('Catalog CSV export', () => {
     cy.visit('/Items')
   })
 
-  it('the export link points at the CSV endpoint, which returns real catalog data', { tags: '@smoke' }, () => {
+  it('the export link points at the CSV endpoint, which returns real catalog data', { tags: '@regression' }, () => {
     cy.getBySel('export-csv-btn').should('have.attr', 'href', '/api/items/export')
 
     cy.request('/api/items/export').then((response) => {

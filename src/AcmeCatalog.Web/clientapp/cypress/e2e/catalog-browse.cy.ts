@@ -101,7 +101,7 @@ describe('Catalog browsing (anonymous)', () => {
     cy.getBySel('quick-view-modal').should('not.be.visible')
   })
 
-  it('Quick View also closes on the Escape key', { tags: '@smoke' }, () => {
+  it('Quick View also closes on the Escape key', { tags: '@regression' }, () => {
     cy.getBySel('quick-view-btn').first().click()
     cy.getBySel('quick-view-modal').should('be.visible')
 

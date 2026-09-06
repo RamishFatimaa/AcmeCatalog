@@ -65,7 +65,7 @@ describe('Catalog view preference', () => {
     cy.visit('/Items')
   })
 
-  it('remembers grid/list view in localStorage across a reload', { tags: '@smoke' }, () => {
+  it('remembers grid/list view in localStorage across a reload', { tags: '@regression' }, () => {
     cy.getBySel('view-list-btn').click()
     cy.getBySel('items-container').should('have.class', 'flex-column')
     cy.window().its('localStorage').invoke('getItem', 'acmecatalog.viewMode').should('eq', 'list')

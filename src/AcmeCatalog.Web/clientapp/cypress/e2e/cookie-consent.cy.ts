@@ -4,7 +4,7 @@
 // explicit teardown needed.
 
 describe('Cookie consent banner', () => {
-  it('shows on first visit; Accept sets a real cookie, not localStorage', { tags: '@smoke' }, () => {
+  it('shows on first visit; Accept sets a real cookie, not localStorage', { tags: '@regression' }, () => {
     cy.visit('/')
     cy.getBySel('cookie-banner').should('be.visible')
     cy.getCookie('acmecatalog_cookie_consent').should('not.exist')
