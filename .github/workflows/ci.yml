@@ -321,7 +321,9 @@ jobs:
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
 
   e2e-regression:
-    if: github.ref == 'refs/heads/stage'
+    # TEMPORARY: also allow this feature branch so e2e-regression can be
+    # watched running once before merge. Revert to stage-only afterward.
+    if: github.ref == 'refs/heads/stage' || github.ref == 'refs/heads/feat/react-component-testing'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
