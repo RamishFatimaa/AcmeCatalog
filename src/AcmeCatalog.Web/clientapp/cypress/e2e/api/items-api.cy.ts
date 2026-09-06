@@ -73,7 +73,7 @@ describe('Items API — writes require a JWT', () => {
 })
 
 describe('Items API — authenticated CRUD lifecycle', () => {
-  let token
+  let token: string
 
   before(() => {
     cy.apiLogin().then((t) => { token = t })

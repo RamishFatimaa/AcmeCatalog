@@ -1,5 +1,7 @@
+using System.Text;
 using AcmeCatalog.Core.Interfaces;
 using AcmeCatalog.Core.Models;
+using AcmeCatalog.Web.Storage;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,23 +12,27 @@ namespace AcmeCatalog.Web.Controllers.Api;
 [Route("api/items")]
 public class ItemsApiController : ControllerBase
 {
-    private readonly IItemService _itemService;
+    private static readonly string[] AllowedImageExtensions = [".jpg", ".jpeg", ".png", ".gif", ".webp"];
 
-    public ItemsApiController(IItemService itemService)
+    private readonly IItemService _itemService;
+    private readonly UploadsPathOptions _uploadsPath;
+
+    public ItemsApiController(IItemService itemService, UploadsPathOptions uploadsPath)
     {
         _itemService = itemService;
+        _uploadsPath = uploadsPath;
     }
 
-    // GET api/items?term=&category=
+    // GET api/items?term=&category=&sort=&minPrice=&maxPrice=
     [HttpGet]
-    public async Task<ActionResult<IReadOnlyList<Item>>> GetAll([FromQuery] string? term, [FromQuery] string? category)
+    public async Task<ActionResult<IReadOnlyList<Item>>> GetAll(
+        [FromQuery] string? term,
+        [FromQuery] string? category,
+        [FromQuery] string? sort,
+        [FromQuery] decimal? minPrice,
+        [FromQuery] decimal? maxPrice)
     {
-        if (!string.IsNullOrWhiteSpace(term) || !string.IsNullOrWhiteSpace(category))
-        {
-            return Ok(await _itemService.SearchAsync(term, category));
-        }
-
-        return Ok(await _itemService.GetAllAsync());
+        return Ok(await _itemService.SearchAsync(term, category, sort, minPrice, maxPrice));
     }
 
     // GET api/items/5
@@ -92,6 +98,80 @@ public class ItemsApiController : ControllerBase
         }
 
         return NoContent();
+    }
+
+    // POST api/items/5/image (multipart/form-data, field name "file")
+    // Restores the image-upload feature the original Razor MVC ItemsController
+    // had (SaveUploadedImageAsync) but that never got reimplemented when the
+    // UI moved to React — ItemForm only ever gained a plain image-URL field.
+    // Saves to UploadsPathOptions.Path rather than WebRootPath directly (the
+    // old code's approach), since that path is what's overridden in
+    // production to a writable directory on Azure App Service.
+    [HttpPost("{id:int}/image")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    [RequestSizeLimit(5 * 1024 * 1024)]
+    public async Task<ActionResult<Item>> UploadImage(int id, IFormFile file)
+    {
+        if (file is null || file.Length == 0)
+        {
+            return Problem(statusCode: 400, title: "No file provided", detail: "Attach an image file under the 'file' form field.");
+        }
+
+        var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!AllowedImageExtensions.Contains(extension))
+        {
+            return Problem(statusCode: 400, title: "Unsupported file type", detail: "Only JPEG, PNG, GIF, and WebP images are supported.");
+        }
+
+        Directory.CreateDirectory(_uploadsPath.Path);
+        var fileName = $"{Guid.NewGuid()}{extension}";
+        var filePath = Path.Combine(_uploadsPath.Path, fileName);
+
+        await using (var stream = new FileStream(filePath, FileMode.Create))
+        {
+            await file.CopyToAsync(stream);
+        }
+
+        var updated = await _itemService.UpdateImageAsync(id, $"/uploads/{fileName}");
+        if (updated is null)
+        {
+            return Problem(statusCode: 404, title: "Item not found", detail: $"No item exists with id {id}.");
+        }
+
+        return Ok(updated);
+    }
+
+    // GET api/items/export
+    [HttpGet("export")]
+    public async Task<IActionResult> Export()
+    {
+        var items = await _itemService.SearchAsync(term: null, category: null, sort: "name");
+
+        var csv = new StringBuilder();
+        csv.AppendLine("Id,Name,Price,Category,Description,DateAdded");
+        foreach (var item in items)
+        {
+            csv.AppendLine(string.Join(",",
+                item.Id,
+                CsvEscape(item.Name),
+                item.Price,
+                CsvEscape(item.Category),
+                CsvEscape(item.Description),
+                item.DateAdded.ToString("O")));
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(csv.ToString());
+        return File(bytes, "text/csv", "acmecatalog-items.csv");
+    }
+
+    private static string CsvEscape(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+        {
+            return $"\"{value.Replace("\"", "\"\"")}\"";
+        }
+
+        return value;
     }
 
     // GET api/items/categories

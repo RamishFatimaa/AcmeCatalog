@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { CookieBanner } from './CookieBanner'
 
 export function Layout() {
   const { isAuthenticated, username, logout } = useAuth()
@@ -80,6 +81,8 @@ export function Layout() {
           </div>
         </div>
       </footer>
+
+      <CookieBanner />
     </>
   )
 }

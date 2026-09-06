@@ -22,7 +22,9 @@
 
   --cat-electronics: #3b6ea5;
   --cat-electronics-bg: #e7eef6;
-  --cat-home: #b8622e;
+  /* #b8622e (matching --brand-accent-dark) only reached 3.69:1 against
+     --cat-home-bg — short of WCAG AA's 4.5:1 for the category badge text. */
+  --cat-home: #96501f;
   --cat-home-bg: #fbe9dc;
   --cat-sporting: #2f6b4f;
   --cat-sporting-bg: #e7f2ec;
@@ -118,6 +120,26 @@ a {
   --bs-btn-border-color: var(--brand-primary);
   --bs-btn-hover-bg: var(--brand-primary);
   --bs-btn-hover-border-color: var(--brand-primary);
+}
+
+/* Bootstrap's stock --bs-btn-color for these two outline variants (#6c757d,
+   #dc3545) is baked into its shipped CSS rather than reading --bs-secondary/
+   --bs-danger, so overriding those root variables doesn't reach them. Against
+   this site's --brand-surface-alt background both fall short of WCAG AA's
+   4.5:1 (4.3:1 and 4.16:1) — overridden here the same way .btn-outline-primary
+   already is. */
+.btn-outline-secondary {
+  --bs-btn-color: var(--brand-ink-soft);
+  --bs-btn-border-color: var(--brand-ink-soft);
+  --bs-btn-hover-bg: var(--brand-ink-soft);
+  --bs-btn-hover-border-color: var(--brand-ink-soft);
+}
+
+.btn-outline-danger {
+  --bs-btn-color: #b02a37;
+  --bs-btn-border-color: #b02a37;
+  --bs-btn-hover-bg: #b02a37;
+  --bs-btn-hover-border-color: #b02a37;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -262,7 +284,11 @@ a {
   letter-spacing: 0.12em;
   font-size: 0.75rem;
   font-weight: 700;
-  color: var(--brand-accent-dark);
+  /* --brand-accent-dark (#b8622e) only reaches 3.99:1 against this small
+     bold text on --brand-surface-alt — short of WCAG AA's 4.5:1. Darkened
+     just for this label rather than the shared token, which is also used
+     where contrast isn't an issue (e.g. category badges on their own bg). */
+  color: #a4551f;
 }
 
 .step-card, .value-card {
@@ -322,6 +348,31 @@ a {
 
 .app-footer a:hover {
   color: #fff;
+}
+
+.cookie-banner {
+  position: fixed;
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1000;
+  background: var(--brand-ink);
+  color: rgba(255, 255, 255, 0.92);
+  border-radius: 0.9rem;
+  box-shadow: var(--shadow-lg);
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+.cookie-banner p {
+  margin: 0;
+  font-size: 0.9rem;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -394,6 +445,67 @@ a {
   cursor: grab;
   user-select: none;
   backdrop-filter: blur(2px);
+}
+
+.select-item-check {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 0.3rem;
+  padding: 0.25rem 0.4rem;
+}
+
+.price-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 0.4rem;
+  background: var(--brand-ink);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 500;
+  white-space: nowrap;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.4rem;
+  box-shadow: var(--shadow-md);
+  z-index: 3;
+}
+
+.context-menu {
+  position: absolute;
+  top: 2.5rem;
+  right: 0.5rem;
+  z-index: 5;
+  background: var(--brand-surface);
+  border: 1px solid var(--brand-border);
+  border-radius: 0.6rem;
+  box-shadow: var(--shadow-lg);
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+}
+
+.context-menu .dropdown-item {
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.context-menu .dropdown-item:hover {
+  background: var(--brand-surface-alt);
+}
+
+.card.flex-row .card-img-top {
+  width: 10rem;
+  height: 10rem;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .cat-badge {

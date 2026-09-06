@@ -18,8 +18,12 @@ interface RequestOptions {
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const isFormData = options.body instanceof FormData
   const headers: Record<string, string> = {}
-  if (options.body !== undefined) {
+  if (options.body !== undefined && !isFormData) {
+    // FormData sets its own Content-Type (with the multipart boundary) —
+    // setting it here would strip that boundary and the server couldn't
+    // parse the upload.
     headers['Content-Type'] = 'application/json'
   }
   if (options.token) {
@@ -29,7 +33,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const response = await fetch(`/api${path}`, {
     method: options.method ?? 'GET',
     headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    body: isFormData ? (options.body as FormData) : options.body !== undefined ? JSON.stringify(options.body) : undefined,
   })
 
   if (response.status === 204) {

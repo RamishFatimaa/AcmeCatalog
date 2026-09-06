@@ -5,6 +5,7 @@ import { Layout } from './components/Layout'
 import { HomePage } from './pages/HomePage'
 import { HelpPage } from './pages/HelpPage'
 import { ItemsPage } from './pages/ItemsPage'
+import { ItemDetailPage } from './pages/ItemDetailPage'
 import { ItemFormPage } from './pages/ItemFormPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
@@ -30,6 +31,7 @@ function AppRoutes() {
       <Route element={<Layout />}>
         <Route index element={<HomePage />} />
         <Route path="Items" element={<ItemsPage />} />
+        <Route path="Items/:id" element={<ItemDetailPage />} />
         <Route
           path="Items/Create"
           element={

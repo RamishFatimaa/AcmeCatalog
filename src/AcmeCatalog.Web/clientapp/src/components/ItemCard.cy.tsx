@@ -19,6 +19,10 @@ describe('<ItemCard />', () => {
     cy.mount(
       <ItemCard
         item={sampleItem}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
         isAuthenticated={false}
         onQuickView={noop}
         onEdit={noop}
@@ -38,6 +42,10 @@ describe('<ItemCard />', () => {
     cy.mount(
       <ItemCard
         item={sampleItem}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
         isAuthenticated={false}
         onQuickView={noop}
         onEdit={noop}
@@ -58,6 +66,10 @@ describe('<ItemCard />', () => {
     cy.mount(
       <ItemCard
         item={sampleItem}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
         isAuthenticated={true}
         onQuickView={noop}
         onEdit={noop}
@@ -78,6 +90,10 @@ describe('<ItemCard />', () => {
     cy.mount(
       <ItemCard
         item={sampleItem}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
         isAuthenticated={false}
         onQuickView={onQuickView}
         onEdit={noop}
@@ -98,6 +114,10 @@ describe('<ItemCard />', () => {
     cy.mount(
       <ItemCard
         item={sampleItem}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
         isAuthenticated={true}
         onQuickView={noop}
         onEdit={onEdit}
@@ -119,6 +139,10 @@ describe('<ItemCard />', () => {
     cy.mount(
       <ItemCard
         item={{ ...sampleItem, imageUrl: null }}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
         isAuthenticated={false}
         onQuickView={noop}
         onEdit={noop}

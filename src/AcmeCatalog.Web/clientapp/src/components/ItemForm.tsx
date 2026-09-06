@@ -6,7 +6,7 @@ const CATEGORIES = ['Electronics', 'Home & Kitchen', 'Sporting Goods', 'Books', 
 
 interface ItemFormProps {
   initial?: Item
-  onSubmit: (item: ItemInput) => Promise<void>
+  onSubmit: (item: ItemInput, imageFile?: File | null) => Promise<void>
   onCancel: () => void
 }
 
@@ -23,6 +23,11 @@ export function ItemForm({ initial, onSubmit, onCancel }: ItemFormProps) {
   const [category, setCategory] = useState(initial?.category ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
   const [imageUrl, setImageUrl] = useState(initial?.imageUrl ?? '')
+  // File upload only makes sense once an item already has an id to attach
+  // the file to (POST /api/items/{id}/image) — new items stay URL-only
+  // until they're saved once, then can switch to a real upload on edit.
+  const [imageMode, setImageMode] = useState<'url' | 'file'>('url')
+  const [imageFile, setImageFile] = useState<File | null>(null)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [submitting, setSubmitting] = useState(false)
 
@@ -46,13 +51,16 @@ export function ItemForm({ initial, onSubmit, onCancel }: ItemFormProps) {
 
     setSubmitting(true)
     try {
-      await onSubmit({
-        name: name.trim(),
-        price: Number(price),
-        category,
-        description: description.trim(),
-        imageUrl: imageUrl.trim() || null,
-      })
+      await onSubmit(
+        {
+          name: name.trim(),
+          price: Number(price),
+          category,
+          description: description.trim(),
+          imageUrl: imageMode === 'url' ? imageUrl.trim() || null : (initial?.imageUrl ?? null),
+        },
+        imageMode === 'file' ? imageFile : null,
+      )
     } catch (err) {
       if (err instanceof ApiError && err.problem?.errors) {
         const serverErrors: FieldErrors = {}
@@ -136,15 +144,54 @@ export function ItemForm({ initial, onSubmit, onCancel }: ItemFormProps) {
       </div>
 
       <div className="mb-4">
-        <label className="form-label" htmlFor="item-image-url">Image URL</label>
-        <input
-          id="item-image-url"
-          className="form-control"
-          placeholder="https://..."
-          data-testid="image-url-input"
-          value={imageUrl}
-          onChange={(e) => setImageUrl(e.target.value)}
-        />
+        <div className="form-label">Image</div>
+        {initial && (
+          <div className="d-flex gap-3 mb-2">
+            <div className="form-check">
+              <input
+                type="radio"
+                className="form-check-input"
+                id="image-mode-url"
+                name="image-mode"
+                data-testid="image-mode-url"
+                checked={imageMode === 'url'}
+                onChange={() => setImageMode('url')}
+              />
+              <label className="form-check-label" htmlFor="image-mode-url">Paste URL</label>
+            </div>
+            <div className="form-check">
+              <input
+                type="radio"
+                className="form-check-input"
+                id="image-mode-file"
+                name="image-mode"
+                data-testid="image-mode-file"
+                checked={imageMode === 'file'}
+                onChange={() => setImageMode('file')}
+              />
+              <label className="form-check-label" htmlFor="image-mode-file">Upload file</label>
+            </div>
+          </div>
+        )}
+
+        {imageMode === 'url' || !initial ? (
+          <input
+            id="item-image-url"
+            className="form-control"
+            placeholder="https://..."
+            data-testid="image-url-input"
+            value={imageUrl}
+            onChange={(e) => setImageUrl(e.target.value)}
+          />
+        ) : (
+          <input
+            type="file"
+            className="form-control"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            data-testid="image-file-input"
+            onChange={(e) => setImageFile(e.target.files?.[0] ?? null)}
+          />
+        )}
       </div>
 
       <div className="d-flex gap-2">

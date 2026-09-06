@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptDir
 $WebProject = Join-Path $RepoRoot "src\AcmeCatalog.Web"
+$ClientApp = Join-Path $WebProject "clientapp"
 $AppUrl = "http://localhost:5274"
 
 Write-Host "==> Detected platform: Windows"
@@ -72,12 +73,17 @@ else {
 }
 
 # ---------------------------------------------------------------------------
-# 5. Cypress dependencies
+# 5. Cypress/React dependencies, and a build so the backend has an SPA
+#    bundle to serve (dotnet run doesn't build clientapp/ — only
+#    `dotnet publish` does, via the csproj's BuildClientApp target).
 # ---------------------------------------------------------------------------
 Write-Host "==> Installing Cypress/npm dependencies..."
-Push-Location $WebProject
+Push-Location $ClientApp
 npm ci
 if ($LASTEXITCODE -ne 0) { Pop-Location; Fail "npm ci failed." }
+Write-Host "==> Building the React app..."
+npm run build
+if ($LASTEXITCODE -ne 0) { Pop-Location; Fail "npm run build failed." }
 Pop-Location
 
 # ---------------------------------------------------------------------------
@@ -124,7 +130,7 @@ Write-Host "==> App is up at $AppUrl"
 # 7. Cypress E2E tests, headless, against the running instance
 # ---------------------------------------------------------------------------
 Write-Host "==> Running Cypress E2E suite..."
-Push-Location $WebProject
+Push-Location $ClientApp
 npx cypress run
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "Cypress suite reported failures. See output above."

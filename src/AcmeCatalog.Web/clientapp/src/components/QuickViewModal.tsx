@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import type { Item } from '../types'
 import { getBadgeClass } from '../categoryStyle'
 
@@ -12,6 +13,17 @@ interface QuickViewModalProps {
 // Bootstrap CSS classes the rest of the app's styling already relies on.
 export function QuickViewModal({ item, onClose }: QuickViewModalProps) {
   const isOpen = item !== null
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, onClose])
 
   return (
     <div
