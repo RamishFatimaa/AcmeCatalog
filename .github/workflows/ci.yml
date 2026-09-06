@@ -238,11 +238,16 @@ jobs:
         with:
           working-directory: src/AcmeCatalog.Web/clientapp
           install: false
-          start: ASPNETCORE_ENVIRONMENT=Development dotnet run --project ../AcmeCatalog.Web.csproj --no-launch-profile --urls http://localhost:5274
+          # start is spawned directly, not through a shell, so the inline
+          # VAR=value prefix that works in a real shell (or a plain `run:`
+          # step) is parsed as a literal executable name here and fails —
+          # ASPNETCORE_ENVIRONMENT has to go through env: instead.
+          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-launch-profile --urls http://localhost:5274
           wait-on: 'http://localhost:5274/health'
           command: npx cypress run --record --parallel --group "E2E Smoke" --tag ${{ github.event_name }} --browser chrome --expose grepTags=@smoke,grepFilterSpecs=true
         env:
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+          ASPNETCORE_ENVIRONMENT: Development
 
       - name: Upload E2E smoke results
         if: always()
@@ -357,11 +362,12 @@ jobs:
         with:
           working-directory: src/AcmeCatalog.Web/clientapp
           install: false
-          start: ASPNETCORE_ENVIRONMENT=Development dotnet run --project ../AcmeCatalog.Web.csproj --no-launch-profile --urls http://localhost:5274
+          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-launch-profile --urls http://localhost:5274
           wait-on: 'http://localhost:5274/health'
           command: npx cypress run --record --parallel --group "E2E Regression" --tag ${{ github.event_name }} --config excludeSpecPattern=**/ai-prompt-demo.cy.ts
         env:
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+          ASPNETCORE_ENVIRONMENT: Development
 
       - name: Upload E2E regression results
         if: always()
