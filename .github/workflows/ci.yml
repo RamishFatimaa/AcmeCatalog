@@ -1,16 +1,5 @@
 name: CI
 
-# This workflow covers the backend only (identity-service + catalog-service)
-# as of the microservices split done this session. The old component-tests,
-# api-tests, e2e-smoke, e2e-regression, and ai-prompt-demo jobs are removed,
-# not left broken: they all assumed one backend on one origin serving a
-# same-origin frontend bundle (src/AcmeCatalog.Web/clientapp), which no
-# longer exists — the frontend now lives at /frontend and doesn't yet know
-# how to reach two separately-hosted services (that rewiring is Phase 2 of
-# the split, not done yet). Re-adding real Cypress coverage in CI depends on
-# that phase landing first; doing it now against the current frontend would
-# either silently test nothing or misreport a broken app as passing.
-
 on:
   push:
   pull_request:
@@ -40,9 +29,9 @@ jobs:
       - name: Build
         run: dotnet build AcmeCatalog.slnx --no-restore --configuration Release
 
-      # Covers both services in one run: identity-service.Tests
+      # Covers both services in one run: IdentityService.Tests
       # (WebApplicationFactory-based, real ASP.NET Identity stack against a
-      # throwaway SQLite file per test) and catalog-service.Tests (Moq for
+      # throwaway SQLite file per test) and CatalogService.Tests (Moq for
       # ItemEnricher's own logic, WireMock.Net for the actual
       # AddIdentityServiceClient resilience pipeline — timeout, retry, and
       # circuit-breaker behavior against real elapsed time, not a mocked
@@ -68,3 +57,256 @@ jobs:
           name: Backend Tests (NUnit)
           path: 'TestResults/*.trx'
           reporter: dotnet-trx
+
+  component-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # No backend involved at all — components mount in isolation with the
+      # app's real CSS (see cypress/support/component.ts), which is the
+      # whole point: a backdrop-click test here was passing by accident of
+      # unstyled layout until that import existed.
+      - name: Run Component Tests
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: frontend
+          install: false
+          component: true
+          record: true
+          key: ${{ secrets.CYPRESS_RECORD_KEY }}
+        env:
+          COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
+
+  # Both backend services + the real Vite dev server, health-checked before
+  # Cypress ever runs — this is exactly the manual sequence used to verify
+  # the split locally, just automated. e2e-smoke and e2e-regression share
+  # this setup as a reusable job via the composite steps below.
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        containers: [1, 2]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Start identity-service
+        working-directory: services/identity-service
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+        run: |
+          nohup dotnet run --no-build --configuration Release --urls http://localhost:5301 > "$GITHUB_WORKSPACE/identity.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5301/health > /dev/null; then echo "identity-service is up"; exit 0; fi
+            sleep 1
+          done
+          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity.log"; exit 1
+
+      - name: Start catalog-service
+        working-directory: services/catalog-service
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Services__IdentityServiceBaseUrl: http://localhost:5301
+        run: |
+          nohup dotnet run --no-build --configuration Release --urls http://localhost:5302 > "$GITHUB_WORKSPACE/catalog.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5302/health > /dev/null; then echo "catalog-service is up"; exit 0; fi
+            sleep 1
+          done
+          echo "catalog-service failed to start"; cat "$GITHUB_WORKSPACE/catalog.log"; exit 1
+
+      # cypress-io/github-action spawns `start:` directly, not through a
+      # shell — inline VAR=value syntax there silently fails to locate the
+      # executable, a real bug this project hit once already. The frontend
+      # doesn't need one here: .env.development already points it at
+      # :5301/:5302, matching the ports started above.
+      # record/key as `with:` inputs only compose into the action's own
+      # invocation when it builds the `cypress run` command itself — once
+      # `command:` is a custom override (needed here for the smoke tag
+      # filter), that composition doesn't reliably happen. Appending
+      # --record directly and exporting CYPRESS_RECORD_KEY as a plain env
+      # var is what Cypress's CLI actually reads, regardless of the action's
+      # own flag-building.
+      - name: Run E2E smoke suite
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: frontend
+          install: false
+          start: npm run dev
+          wait-on: 'http://localhost:5173'
+          wait-on-timeout: 90
+          command: npm run e2e:smoke -- --record
+        env:
+          COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+  e2e-regression:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/stage'
+    strategy:
+      fail-fast: false
+      matrix:
+        containers: [1, 2, 3]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Start identity-service
+        working-directory: services/identity-service
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+        run: |
+          nohup dotnet run --no-build --configuration Release --urls http://localhost:5301 > "$GITHUB_WORKSPACE/identity.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5301/health > /dev/null; then echo "identity-service is up"; exit 0; fi
+            sleep 1
+          done
+          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity.log"; exit 1
+
+      - name: Start catalog-service
+        working-directory: services/catalog-service
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Services__IdentityServiceBaseUrl: http://localhost:5301
+        run: |
+          nohup dotnet run --no-build --configuration Release --urls http://localhost:5302 > "$GITHUB_WORKSPACE/catalog.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5302/health > /dev/null; then echo "catalog-service is up"; exit 0; fi
+            sleep 1
+          done
+          echo "catalog-service failed to start"; cat "$GITHUB_WORKSPACE/catalog.log"; exit 1
+
+      - name: Run E2E regression suite
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: frontend
+          install: false
+          start: npm run dev
+          wait-on: 'http://localhost:5173'
+          wait-on-timeout: 90
+          command: npm run e2e:regression -- --record
+        env:
+          COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+  ai-prompt-demo:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Start identity-service
+        working-directory: services/identity-service
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+        run: |
+          nohup dotnet run --no-build --configuration Release --urls http://localhost:5301 > "$GITHUB_WORKSPACE/identity.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5301/health > /dev/null; then echo "identity-service is up"; exit 0; fi
+            sleep 1
+          done
+          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity.log"; exit 1
+
+      - name: Start catalog-service
+        working-directory: services/catalog-service
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Services__IdentityServiceBaseUrl: http://localhost:5301
+        run: |
+          nohup dotnet run --no-build --configuration Release --urls http://localhost:5302 > "$GITHUB_WORKSPACE/catalog.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5302/health > /dev/null; then echo "catalog-service is up"; exit 0; fi
+            sleep 1
+          done
+          echo "catalog-service failed to start"; cat "$GITHUB_WORKSPACE/catalog.log"; exit 1
+
+      # e2e:ai-demo already has --record baked into its own package.json
+      # script — just needs the key available as the env var Cypress's CLI
+      # actually reads, same reasoning as the smoke/regression jobs above.
+      - name: Run cy.prompt() demo
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: frontend
+          install: false
+          start: npm run dev
+          wait-on: 'http://localhost:5173'
+          wait-on-timeout: 90
+          command: npm run e2e:ai-demo
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
