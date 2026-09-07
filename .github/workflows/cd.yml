@@ -1,74 +1,31 @@
 name: CD
 
+# Paused, not fixed-in-place: this used to publish AcmeCatalog.Web (the
+# monolith) to the single "acmecatalog-web" App Service. That project no
+# longer exists after this session's split into identity-service and
+# catalog-service, so there's nothing left for the old steps to build.
+#
+# The plan for this workflow's replacement is two independent deploys, one
+# per service, each to its own Azure Container Apps instance (see the
+# architecture plan) — but that means provisioning new Azure infrastructure
+# (a Container Apps Environment + a registry), which has real cost
+# implications beyond the single free/cheap App Service that already exists.
+# That's a decision to make explicitly, not something to do silently as a
+# side effect of a code split. Trigger is workflow_dispatch-only for now so
+# pushing to stage doesn't fire a deploy that can only fail.
+
 on:
-  push:
-    branches: [stage]
+  workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
 
-env:
-  AZURE_WEBAPP_NAME: acmecatalog-web
-
 jobs:
-  deploy:
+  placeholder:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Restore
-        run: dotnet restore AcmeCatalog.slnx
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
-
-      # Has to happen as its own step, before `dotnet publish` runs — not as an
-      # MSBuild target inside the .csproj. MSBuild evaluates wwwroot's static
-      # web assets glob once, before any target executes, so a build triggered
-      # mid-publish (however it's hooked in) never makes it into the
-      # *.staticwebassets.endpoints.json manifest that MapStaticAssets() reads
-      # at runtime — confirmed against a real Azure deploy: the page loaded,
-      # but every asset routed through MapStaticAssets() 404'd. Building here
-      # guarantees the files exist on disk before dotnet publish ever starts.
-      - name: Build React app
-        run: npm ci && npm run build
-        working-directory: src/AcmeCatalog.Web/clientapp
-
-      - name: Publish Web project
-        run: >
-          dotnet publish src/AcmeCatalog.Web/AcmeCatalog.Web.csproj
-          --configuration Release
-          --output ./publish
-
-      # Kudu's zipdeploy does a clean atomic extract of a zip archive; pointing
-      # azure/webapps-deploy at a raw folder instead makes it fall back to an
-      # incremental folder sync, which is worth avoiding on general
-      # reliability grounds even though it wasn't the actual cause of the
-      # clientapp-dist bug above (that was the MSBuild timing issue).
-      - name: Zip publish output
-        run: (cd publish && zip -r ../publish.zip . -x '*.pdb')
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          package: ./publish.zip
+      - name: Explain current state
+        run: |
+          echo "CD is paused pending the Container Apps infrastructure decision for identity-service and catalog-service."
+          echo "See the comment at the top of this workflow file."
