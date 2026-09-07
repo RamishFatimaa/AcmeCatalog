@@ -45,15 +45,66 @@ public class ItemServiceTests
     }
 
     [Test]
-    public async Task GetAllAsync_ReturnsItemsOrderedBySortOrder()
+    public async Task SearchAsync_NoFilters_ReturnsItemsOrderedBySortOrder()
     {
         await SeedItemAsync("Charlie", Categories.Books, 10m, sortOrder: 2);
         await SeedItemAsync("Alpha", Categories.Books, 10m, sortOrder: 0);
         await SeedItemAsync("Bravo", Categories.Books, 10m, sortOrder: 1);
 
-        var result = await _service.GetAllAsync();
+        var result = await _service.SearchAsync(term: null, category: null);
 
         Assert.That(result.Select(i => i.Name), Is.EqualTo(new[] { "Alpha", "Bravo", "Charlie" }));
+    }
+
+    [Test]
+    public async Task SearchAsync_SortName_OrdersAlphabetically()
+    {
+        await SeedItemAsync("Charlie", Categories.Books, 10m, sortOrder: 0);
+        await SeedItemAsync("Alpha", Categories.Books, 10m, sortOrder: 1);
+        await SeedItemAsync("Bravo", Categories.Books, 10m, sortOrder: 2);
+
+        var result = await _service.SearchAsync(term: null, category: null, sort: "name");
+
+        Assert.That(result.Select(i => i.Name), Is.EqualTo(new[] { "Alpha", "Bravo", "Charlie" }));
+    }
+
+    [Test]
+    public async Task SearchAsync_SortPrice_OrdersLowToHigh()
+    {
+        await SeedItemAsync("Expensive", Categories.Books, 30m, sortOrder: 0);
+        await SeedItemAsync("Cheap", Categories.Books, 10m, sortOrder: 1);
+        await SeedItemAsync("Middle", Categories.Books, 20m, sortOrder: 2);
+
+        var result = await _service.SearchAsync(term: null, category: null, sort: "price");
+
+        Assert.That(result.Select(i => i.Name), Is.EqualTo(new[] { "Cheap", "Middle", "Expensive" }));
+    }
+
+    [Test]
+    public async Task SearchAsync_SortNewest_OrdersMostRecentDateAddedFirst()
+    {
+        var older = await SeedItemAsync("Older", Categories.Books, 10m, sortOrder: 0);
+        older.DateAdded = DateTime.UtcNow.AddDays(-2);
+        var newer = await SeedItemAsync("Newer", Categories.Books, 10m, sortOrder: 1);
+        newer.DateAdded = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        var result = await _service.SearchAsync(term: null, category: null, sort: "newest");
+
+        Assert.That(result.Select(i => i.Name), Is.EqualTo(new[] { "Newer", "Older" }));
+    }
+
+    [Test]
+    public async Task SearchAsync_PriceRange_FiltersInclusively()
+    {
+        await SeedItemAsync("TooCheap", Categories.Books, 5m, sortOrder: 0);
+        await SeedItemAsync("InRangeLow", Categories.Books, 10m, sortOrder: 1);
+        await SeedItemAsync("InRangeHigh", Categories.Books, 20m, sortOrder: 2);
+        await SeedItemAsync("TooExpensive", Categories.Books, 30m, sortOrder: 3);
+
+        var result = await _service.SearchAsync(term: null, category: null, minPrice: 10m, maxPrice: 20m);
+
+        Assert.That(result.Select(i => i.Name), Is.EquivalentTo(new[] { "InRangeLow", "InRangeHigh" }));
     }
 
     [Test]
@@ -244,7 +295,7 @@ public class ItemServiceTests
         // Move Third to the front, keep Second in the middle, First last.
         await _service.ReorderAsync(new[] { third.Id, second.Id, first.Id });
 
-        var ordered = await _service.GetAllAsync();
+        var ordered = await _service.SearchAsync(term: null, category: null);
 
         Assert.That(ordered.Select(i => i.Name), Is.EqualTo(new[] { "Third", "Second", "First" }));
     }
@@ -256,7 +307,7 @@ public class ItemServiceTests
 
         await _service.ReorderAsync(Array.Empty<int>());
 
-        var ordered = await _service.GetAllAsync();
+        var ordered = await _service.SearchAsync(term: null, category: null);
         Assert.That(ordered, Has.Count.EqualTo(1));
     }
 }

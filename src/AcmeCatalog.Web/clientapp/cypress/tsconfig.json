@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "es2021",
+    "lib": ["es2021", "dom"],
+    "types": ["cypress", "cypress-axe", "cypress-terminal-report", "node"],
+    "isolatedModules": false
+  },
+  "include": ["**/*.ts", "../cypress.config.ts"]
+}

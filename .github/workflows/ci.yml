@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,7 +11,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  build-and-test:
+  unit-tests:
     runs-on: ubuntu-latest
 
     steps:
@@ -50,59 +51,367 @@ jobs:
           path: 'TestResults/*.trx'
           reporter: dotnet-trx
 
+  component-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: src/AcmeCatalog.Web/package-lock.json
+          cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
 
-      - name: Install Cypress/npm dependencies
-        working-directory: src/AcmeCatalog.Web
+      - name: Install npm dependencies
+        working-directory: src/AcmeCatalog.Web/clientapp
         run: npm ci
 
-      - name: Start app in background
+      # Building here (rather than letting the next step's `dotnet run`
+      # restore+compile cold) keeps the whole solution's compile time out of
+      # the health-check race below — a cold restore+build can easily exceed
+      # a short timeout on a shared runner, which is exactly what made
+      # ai-prompt-demo's equivalent step flake on a real PR run.
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      # Component Testing's index.html links straight to /lib/bootstrap and
+      # /css/site.css, which clientapp's Vite dev server proxies to the real
+      # backend (see vite.config.ts) — so the backend has to be running even
+      # though these tests never touch its API.
+      - name: Start backend in background
         working-directory: src/AcmeCatalog.Web
         run: |
-          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-launch-profile --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
-          for i in $(seq 1 30); do
+          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-build --no-launch-profile --configuration Release --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:5274/health > /dev/null; then
               echo "App is up"
               exit 0
             fi
             sleep 1
           done
-          echo "App did not become healthy within 30s" >&2
+          echo "App did not become healthy within 60s" >&2
           cat "$GITHUB_WORKSPACE/app.log"
           exit 1
 
-      - name: Run Cypress E2E suite
-        working-directory: src/AcmeCatalog.Web
-        env:
-          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
-        run: npx cypress run --record
+      - name: Run Component Tests
+        working-directory: src/AcmeCatalog.Web/clientapp
+        run: npx cypress run --component
 
-      - name: Upload Cypress test results
+      - name: Upload Component Test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cypress-test-results
-          path: src/AcmeCatalog.Web/cypress/results/
+          name: component-test-results
+          path: src/AcmeCatalog.Web/clientapp/cypress/results/
 
-      - name: Publish Cypress test report
+      - name: Publish Component Test report
         if: always()
         uses: dorny/test-reporter@v1
         with:
-          name: Cypress E2E Tests
-          path: 'src/AcmeCatalog.Web/cypress/results/*.xml'
+          name: Component Tests
+          path: 'src/AcmeCatalog.Web/clientapp/cypress/results/*.xml'
           reporter: java-junit
 
-      - name: Upload Cypress artifacts on failure
+      - name: Upload Component Test artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: cypress-artifacts
+          name: component-test-artifacts
           path: |
-            src/AcmeCatalog.Web/cypress/screenshots
-            src/AcmeCatalog.Web/cypress/videos
+            src/AcmeCatalog.Web/clientapp/cypress/screenshots
+            src/AcmeCatalog.Web/clientapp/cypress/videos
             app.log
+
+  api-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: src/AcmeCatalog.Web/clientapp
+        run: npm ci
+
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      - name: Start app in background
+        working-directory: src/AcmeCatalog.Web
+        run: |
+          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-build --no-launch-profile --configuration Release --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5274/health > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App did not become healthy within 60s" >&2
+          cat "$GITHUB_WORKSPACE/app.log"
+          exit 1
+
+      - name: Run API tests
+        working-directory: src/AcmeCatalog.Web/clientapp
+        run: npx cypress run --spec "cypress/e2e/api/**/*.cy.ts"
+
+      - name: Upload API test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-results
+          path: src/AcmeCatalog.Web/clientapp/cypress/results/
+
+      - name: Publish API test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: API Tests
+          path: 'src/AcmeCatalog.Web/clientapp/cypress/results/*.xml'
+          reporter: java-junit
+
+      - name: Upload API test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-artifacts
+          path: |
+            src/AcmeCatalog.Web/clientapp/cypress/screenshots
+            src/AcmeCatalog.Web/clientapp/cypress/videos
+            app.log
+
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        containers: [1, 2]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
+
+      # Unlike component-tests/api-tests, these specs visit real pages served
+      # by MapFallbackToFile, so the compiled SPA bundle has to exist under
+      # wwwroot/clientapp-dist before the backend starts (dotnet run doesn't
+      # build it — only `dotnet publish` does, via the csproj's BuildClientApp
+      # target). install: false below because deps are already installed here.
+      - name: Install deps and build the React app
+        working-directory: src/AcmeCatalog.Web/clientapp
+        run: |
+          npm ci
+          npm run build
+
+      # Built once here so `start:` below only has to launch already-compiled
+      # output, not cold-restore-compile-run inside the wait-on window — the
+      # same cold-start race that flaked one of the plain `run:`-based jobs.
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      # cypress-io/github-action links Cypress Cloud's parallelization across
+      # this job's matrix legs automatically via GitHub's own CI env vars, no
+      # explicit ci-build-id needed. --expose (not --env) is how @cypress/grep
+      # 7.x reads grepTags now, and the action has no dedicated input for it
+      # (added after this action version), so it's passed via a raw `command`
+      # override instead of the record/parallel/group inputs.
+      #
+      # working-directory is this Cypress project (clientapp), but the
+      # backend it needs running lives one level up — --project points dotnet
+      # at the right .csproj regardless of the shell's cwd.
+      - name: Run E2E smoke suite
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: src/AcmeCatalog.Web/clientapp
+          install: false
+          # start is spawned directly, not through a shell, so the inline
+          # VAR=value prefix that works in a real shell (or a plain `run:`
+          # step) is parsed as a literal executable name here and fails —
+          # ASPNETCORE_ENVIRONMENT has to go through env: instead.
+          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-build --no-launch-profile --configuration Release --urls http://localhost:5274
+          wait-on: 'http://localhost:5274/health'
+          wait-on-timeout: 90
+          command: npx cypress run --record --parallel --group "E2E Smoke" --tag ${{ github.event_name }} --browser chrome --expose grepTags=@smoke,grepFilterSpecs=true
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+          ASPNETCORE_ENVIRONMENT: Development
+
+      - name: Upload E2E smoke results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-smoke-results-${{ matrix.containers }}
+          path: src/AcmeCatalog.Web/clientapp/cypress/results/
+
+      - name: Publish E2E smoke report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: E2E Smoke (container ${{ matrix.containers }})
+          path: 'src/AcmeCatalog.Web/clientapp/cypress/results/*.xml'
+          reporter: java-junit
+
+      - name: Upload E2E smoke artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-smoke-artifacts-${{ matrix.containers }}
+          path: |
+            src/AcmeCatalog.Web/clientapp/cypress/screenshots
+            src/AcmeCatalog.Web/clientapp/cypress/videos
+
+  # Bonus/stretch, not a real gate: cy.prompt() is Cypress's newest (beta)
+  # feature and needs live Cypress Cloud access to translate natural-language
+  # steps into commands. continue-on-error means a Cloud outage or this beta
+  # feature being pulled never fails the build — this job exists to showcase
+  # the capability, not to guard anything.
+  ai-prompt-demo:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
+
+      - name: Install deps and build the React app
+        working-directory: src/AcmeCatalog.Web/clientapp
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      - name: Start app in background
+        working-directory: src/AcmeCatalog.Web
+        run: |
+          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-build --no-launch-profile --configuration Release --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5274/health > /dev/null; then
+              echo "App is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App did not become healthy within 60s" >&2
+          cat "$GITHUB_WORKSPACE/app.log"
+          exit 1
+
+      - name: Run cy.prompt() demo
+        working-directory: src/AcmeCatalog.Web/clientapp
+        run: npm run e2e:ai-demo
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+  e2e-regression:
+    if: github.ref == 'refs/heads/stage'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        containers: [1, 2, 3]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
+
+      - name: Install deps and build the React app
+        working-directory: src/AcmeCatalog.Web/clientapp
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      - name: Run E2E regression suite
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: src/AcmeCatalog.Web/clientapp
+          install: false
+          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-build --no-launch-profile --configuration Release --urls http://localhost:5274
+          wait-on: 'http://localhost:5274/health'
+          wait-on-timeout: 90
+          command: npx cypress run --record --parallel --group "E2E Regression" --tag ${{ github.event_name }} --config excludeSpecPattern=**/ai-prompt-demo.cy.ts
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+          ASPNETCORE_ENVIRONMENT: Development
+
+      - name: Upload E2E regression results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-regression-results-${{ matrix.containers }}
+          path: src/AcmeCatalog.Web/clientapp/cypress/results/
+
+      - name: Publish E2E regression report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: E2E Regression (container ${{ matrix.containers }})
+          path: 'src/AcmeCatalog.Web/clientapp/cypress/results/*.xml'
+          reporter: java-junit
+
+      - name: Upload E2E regression artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-regression-artifacts-${{ matrix.containers }}
+          path: |
+            src/AcmeCatalog.Web/clientapp/cypress/screenshots
+            src/AcmeCatalog.Web/clientapp/cypress/videos

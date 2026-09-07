@@ -18,4 +18,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!--
+    Builds the React app (clientapp/) into wwwroot/clientapp-dist as part of
+    `dotnet publish`, so the deployed package always has an up-to-date bundle.
+    Runs before the static-web-assets/publish steps pick up wwwroot's contents.
+  -->
+  <Target Name="BuildClientApp" BeforeTargets="Publish">
+    <Exec Command="npm ci" WorkingDirectory="clientapp" />
+    <Exec Command="npm run build" WorkingDirectory="clientapp" />
+  </Target>
+
 </Project>

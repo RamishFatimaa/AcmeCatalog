@@ -27,6 +27,16 @@ jobs:
       - name: Restore
         run: dotnet restore AcmeCatalog.slnx
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
+
+      # dotnet publish triggers a BuildClientApp MSBuild target (see the .csproj)
+      # that runs npm ci/build for clientapp/ before packaging — Node has to be
+      # on the runner for that to succeed.
       - name: Publish Web project
         run: >
           dotnet publish src/AcmeCatalog.Web/AcmeCatalog.Web.csproj

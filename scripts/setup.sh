@@ -7,6 +7,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WEB_PROJECT="$REPO_ROOT/src/AcmeCatalog.Web"
+CLIENTAPP="$WEB_PROJECT/clientapp"
 APP_URL="http://localhost:5274"
 
 OS="$(uname -s)"
@@ -73,10 +74,14 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Cypress dependencies
+# 5. Cypress/React dependencies, and a build so the backend has an SPA
+#    bundle to serve (dotnet run doesn't build clientapp/ — only
+#    `dotnet publish` does, via the csproj's BuildClientApp target).
 # ---------------------------------------------------------------------------
 echo "==> Installing Cypress/npm dependencies..."
-(cd "$WEB_PROJECT" && npm ci) || fail "npm ci failed."
+(cd "$CLIENTAPP" && npm ci) || fail "npm ci failed."
+echo "==> Building the React app..."
+(cd "$CLIENTAPP" && npm run build) || fail "npm run build failed."
 
 # ---------------------------------------------------------------------------
 # 6. Start the app in the background
@@ -112,7 +117,7 @@ echo "==> App is up at $APP_URL"
 # 7. Cypress E2E tests, headless, against the running instance
 # ---------------------------------------------------------------------------
 echo "==> Running Cypress E2E suite..."
-if (cd "$WEB_PROJECT" && npx cypress run); then
+if (cd "$CLIENTAPP" && npx cypress run); then
   echo "==> Cypress suite passed."
 else
   echo "WARNING: Cypress suite reported failures. See output above." >&2

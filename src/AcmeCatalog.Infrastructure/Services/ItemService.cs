@@ -14,14 +14,7 @@ public class ItemService : IItemService
         _context = context;
     }
 
-    public async Task<IReadOnlyList<Item>> GetAllAsync()
-    {
-        return await _context.Items
-            .OrderBy(i => i.SortOrder)
-            .ToListAsync();
-    }
-
-    public async Task<IReadOnlyList<Item>> SearchAsync(string? term, string? category)
+    public async Task<IReadOnlyList<Item>> SearchAsync(string? term, string? category, string? sort = null, decimal? minPrice = null, decimal? maxPrice = null)
     {
         var query = _context.Items.AsQueryable();
 
@@ -38,7 +31,25 @@ public class ItemService : IItemService
                 i.Description.ToLower().Contains(normalized));
         }
 
-        return await query.OrderBy(i => i.SortOrder).ToListAsync();
+        if (minPrice.HasValue)
+        {
+            query = query.Where(i => i.Price >= minPrice.Value);
+        }
+
+        if (maxPrice.HasValue)
+        {
+            query = query.Where(i => i.Price <= maxPrice.Value);
+        }
+
+        query = sort switch
+        {
+            "name" => query.OrderBy(i => i.Name),
+            "price" => query.OrderBy(i => i.Price),
+            "newest" => query.OrderByDescending(i => i.DateAdded),
+            _ => query.OrderBy(i => i.SortOrder),
+        };
+
+        return await query.ToListAsync();
     }
 
     public async Task<Item?> GetByIdAsync(int id)
@@ -81,6 +92,19 @@ public class ItemService : IItemService
 
         await _context.SaveChangesAsync();
         return true;
+    }
+
+    public async Task<Item?> UpdateImageAsync(int id, string imageUrl)
+    {
+        var existing = await _context.Items.FindAsync(id);
+        if (existing is null)
+        {
+            return null;
+        }
+
+        existing.ImageUrl = imageUrl;
+        await _context.SaveChangesAsync();
+        return existing;
     }
 
     public async Task<bool> DeleteAsync(int id)
