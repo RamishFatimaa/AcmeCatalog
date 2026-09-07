@@ -43,6 +43,15 @@ jobs:
           --configuration Release
           --output ./publish
 
+      # Kudu's zipdeploy does a clean atomic extract of a zip archive; pointing
+      # azure/webapps-deploy at a raw folder instead makes it fall back to an
+      # incremental folder sync, which has repeatedly been unreliable about
+      # picking up newly-added nested directories (this bit us: clientapp-dist/
+      # never made it to the live site even though `dotnet publish` produced it
+      # correctly and CD reported success).
+      - name: Zip publish output
+        run: (cd publish && zip -r ../publish.zip . -x '*.pdb')
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -54,4 +63,4 @@ jobs:
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          package: ./publish
+          package: ./publish.zip
