@@ -74,6 +74,14 @@ jobs:
         working-directory: src/AcmeCatalog.Web/clientapp
         run: npm ci
 
+      # Building here (rather than letting the next step's `dotnet run`
+      # restore+compile cold) keeps the whole solution's compile time out of
+      # the health-check race below — a cold restore+build can easily exceed
+      # a short timeout on a shared runner, which is exactly what made
+      # ai-prompt-demo's equivalent step flake on a real PR run.
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
       # Component Testing's index.html links straight to /lib/bootstrap and
       # /css/site.css, which clientapp's Vite dev server proxies to the real
       # backend (see vite.config.ts) — so the backend has to be running even
@@ -81,15 +89,15 @@ jobs:
       - name: Start backend in background
         working-directory: src/AcmeCatalog.Web
         run: |
-          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-launch-profile --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
-          for i in $(seq 1 30); do
+          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-build --no-launch-profile --configuration Release --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:5274/health > /dev/null; then
               echo "App is up"
               exit 0
             fi
             sleep 1
           done
-          echo "App did not become healthy within 30s" >&2
+          echo "App did not become healthy within 60s" >&2
           cat "$GITHUB_WORKSPACE/app.log"
           exit 1
 
@@ -145,18 +153,21 @@ jobs:
         working-directory: src/AcmeCatalog.Web/clientapp
         run: npm ci
 
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
       - name: Start app in background
         working-directory: src/AcmeCatalog.Web
         run: |
-          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-launch-profile --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
-          for i in $(seq 1 30); do
+          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-build --no-launch-profile --configuration Release --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:5274/health > /dev/null; then
               echo "App is up"
               exit 0
             fi
             sleep 1
           done
-          echo "App did not become healthy within 30s" >&2
+          echo "App did not become healthy within 60s" >&2
           cat "$GITHUB_WORKSPACE/app.log"
           exit 1
 
@@ -223,6 +234,12 @@ jobs:
           npm ci
           npm run build
 
+      # Built once here so `start:` below only has to launch already-compiled
+      # output, not cold-restore-compile-run inside the wait-on window — the
+      # same cold-start race that flaked one of the plain `run:`-based jobs.
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
       # cypress-io/github-action links Cypress Cloud's parallelization across
       # this job's matrix legs automatically via GitHub's own CI env vars, no
       # explicit ci-build-id needed. --expose (not --env) is how @cypress/grep
@@ -242,8 +259,9 @@ jobs:
           # VAR=value prefix that works in a real shell (or a plain `run:`
           # step) is parsed as a literal executable name here and fails —
           # ASPNETCORE_ENVIRONMENT has to go through env: instead.
-          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-launch-profile --urls http://localhost:5274
+          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-build --no-launch-profile --configuration Release --urls http://localhost:5274
           wait-on: 'http://localhost:5274/health'
+          wait-on-timeout: 90
           command: npx cypress run --record --parallel --group "E2E Smoke" --tag ${{ github.event_name }} --browser chrome --expose grepTags=@smoke,grepFilterSpecs=true
         env:
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
@@ -304,18 +322,21 @@ jobs:
           npm ci
           npm run build
 
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
       - name: Start app in background
         working-directory: src/AcmeCatalog.Web
         run: |
-          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-launch-profile --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
-          for i in $(seq 1 30); do
+          ASPNETCORE_ENVIRONMENT=Development nohup dotnet run --no-build --no-launch-profile --configuration Release --urls http://localhost:5274 > "$GITHUB_WORKSPACE/app.log" 2>&1 &
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:5274/health > /dev/null; then
               echo "App is up"
               exit 0
             fi
             sleep 1
           done
-          echo "App did not become healthy within 30s" >&2
+          echo "App did not become healthy within 60s" >&2
           cat "$GITHUB_WORKSPACE/app.log"
           exit 1
 
@@ -355,13 +376,17 @@ jobs:
           npm ci
           npm run build
 
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
       - name: Run E2E regression suite
         uses: cypress-io/github-action@v6
         with:
           working-directory: src/AcmeCatalog.Web/clientapp
           install: false
-          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-launch-profile --urls http://localhost:5274
+          start: dotnet run --project ../AcmeCatalog.Web.csproj --no-build --no-launch-profile --configuration Release --urls http://localhost:5274
           wait-on: 'http://localhost:5274/health'
+          wait-on-timeout: 90
           command: npx cypress run --record --parallel --group "E2E Regression" --tag ${{ github.event_name }} --config excludeSpecPattern=**/ai-prompt-demo.cy.ts
         env:
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
