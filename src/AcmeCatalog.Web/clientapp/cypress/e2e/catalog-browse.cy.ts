@@ -44,6 +44,9 @@ describe('Catalog browsing (anonymous)', () => {
   })
 
   it('shows a graceful error if the catalog fails to load', { tags: '@regression' }, () => {
+    // The forced network error itself surfaces as a real console error (the
+    // browser logging the failed fetch) — expected here, not a regression.
+    cy.allowConsoleErrors()
     cy.intercept('GET', '/api/items*', { forceNetworkError: true }).as('itemsFailure')
 
     cy.getBySel('category-filter').select('Books')

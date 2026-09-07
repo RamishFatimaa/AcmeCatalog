@@ -23,6 +23,9 @@ declare global {
 
       /** Logs in as `username` and caches the resulting auth session via cy.session(). */
       loginSession(username?: string, password?: string): Chainable<void>
+
+      /** Opts the current test out of the global "no console.error" check (support/e2e.ts). */
+      allowConsoleErrors(): Chainable<void>
     }
   }
 }

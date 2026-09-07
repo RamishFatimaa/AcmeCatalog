@@ -23,18 +23,32 @@ describe('Catalog bulk actions (authenticated)', () => {
   })
 
   it('Delete Selected removes exactly the checked items', { tags: '@smoke' }, () => {
+    cy.window().then((win) => cy.stub(win, 'confirm').returns(true)).as('confirm')
+
     cy.getBySel('item-name').eq(0).invoke('text').then((firstName) => {
       cy.getBySel('item-name').eq(1).invoke('text').then((secondName) => {
         cy.getBySel('select-item-checkbox').eq(0).click()
         cy.getBySel('select-item-checkbox').eq(1).click()
         cy.getBySel('delete-selected-btn').click()
 
+        cy.get('@confirm').should('have.been.calledWith', "Delete 2 selected item(s)? This can't be undone.")
         cy.getBySel('toast-notification').should('contain.text', '2 item(s) deleted')
         cy.getBySel('bulk-actions-bar').should('not.exist')
         cy.contains('[data-testid=item-name]', firstName).should('not.exist')
         cy.contains('[data-testid=item-name]', secondName).should('not.exist')
       })
     })
+  })
+
+  it('does not delete the selection when the confirm dialog is dismissed', { tags: '@regression' }, () => {
+    cy.window().then((win) => cy.stub(win, 'confirm').returns(false))
+
+    cy.getBySel('select-item-checkbox').eq(0).click()
+    cy.getBySel('select-item-checkbox').eq(1).click()
+    cy.getBySel('delete-selected-btn').click()
+
+    cy.getBySel('selected-count').should('contain.text', '2 selected')
+    cy.getBySel('toast-notification').should('not.exist')
   })
 })
 

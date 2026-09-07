@@ -58,12 +58,32 @@ describe('Catalog management (authenticated)', () => {
   })
 
   it('deletes an item after confirming', { tags: '@smoke' }, () => {
+    // Stubbed explicitly (not relying on Cypress's default auto-accept)
+    // so the exact confirmation message is actually asserted, not just
+    // assumed to be whatever happened to show up.
+    cy.window().then((win) => cy.stub(win, 'confirm').returns(true)).as('confirm')
+
     cy.getBySel('search-input').type('Trade Routes')
     cy.getBySel('item-card').should('have.length', 1)
     cy.getBySel('delete-btn').click()
 
+    cy.get('@confirm').should(
+      'have.been.calledWith',
+      'Delete "Strategy Board Game: Trade Routes"? This can\'t be undone.',
+    )
     cy.getBySel('toast-notification').should('contain.text', 'was deleted')
     cy.getBySel('no-results').should('be.visible')
+  })
+
+  it('does not delete when the confirm dialog is dismissed', { tags: '@regression' }, () => {
+    cy.window().then((win) => cy.stub(win, 'confirm').returns(false))
+
+    cy.getBySel('search-input').type('Trade Routes')
+    cy.getBySel('item-card').should('have.length', 1)
+    cy.getBySel('delete-btn').click()
+
+    cy.getBySel('item-card').should('have.length', 1)
+    cy.getBySel('toast-notification').should('not.exist')
   })
 
   it('reorders items via drag; the persisted request body matches the new order', { tags: '@smoke' }, () => {
