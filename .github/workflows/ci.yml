@@ -225,9 +225,10 @@ jobs:
 
       # Unlike component-tests/api-tests, these specs visit real pages served
       # by MapFallbackToFile, so the compiled SPA bundle has to exist under
-      # wwwroot/clientapp-dist before the backend starts (dotnet run doesn't
-      # build it — only `dotnet publish` does, via the csproj's BuildClientApp
-      # target). install: false below because deps are already installed here.
+      # wwwroot/clientapp-dist before the backend starts — neither `dotnet
+      # build` nor `dotnet publish` builds it on their own, it has to be a
+      # separate step. install: false below because deps are already
+      # installed here.
       - name: Install deps and build the React app
         working-directory: src/AcmeCatalog.Web/clientapp
         run: |

@@ -19,13 +19,19 @@
   </PropertyGroup>
 
   <!--
-    Builds the React app (clientapp/) into wwwroot/clientapp-dist as part of
-    `dotnet publish`, so the deployed package always has an up-to-date bundle.
-    Runs before the static-web-assets/publish steps pick up wwwroot's contents.
+    wwwroot/clientapp-dist/ (the React build output) is NOT built as part of
+    this project's own MSBuild targets. MSBuild's wwwroot item glob for the
+    static web assets manifest (*.staticwebassets.endpoints.json) is evaluated
+    once, before any target runs — no BeforeTargets/AfterTargets hook inside a
+    single `dotnet publish` invocation runs early enough to make freshly-built
+    files show up in it. MapFallbackToFile can still find a file written later
+    by walking the filesystem directly, but MapStaticAssets() only resolves
+    through that frozen manifest, so anything built mid-publish 404s at
+    runtime even though the publish itself reports success (confirmed against
+    a real Azure deploy). The only reliable fix is to run `npm ci && npm run
+    build` in clientapp/ as its own separate step BEFORE invoking `dotnet
+    publish` at all (see .github/workflows/cd.yml) — that way the files exist
+    on disk before MSBuild ever starts evaluating this project.
   -->
-  <Target Name="BuildClientApp" BeforeTargets="Publish">
-    <Exec Command="npm ci" WorkingDirectory="clientapp" />
-    <Exec Command="npm run build" WorkingDirectory="clientapp" />
-  </Target>
 
 </Project>

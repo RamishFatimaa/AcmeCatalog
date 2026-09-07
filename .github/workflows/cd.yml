@@ -34,9 +34,18 @@ jobs:
           cache: 'npm'
           cache-dependency-path: src/AcmeCatalog.Web/clientapp/package-lock.json
 
-      # dotnet publish triggers a BuildClientApp MSBuild target (see the .csproj)
-      # that runs npm ci/build for clientapp/ before packaging — Node has to be
-      # on the runner for that to succeed.
+      # Has to happen as its own step, before `dotnet publish` runs — not as an
+      # MSBuild target inside the .csproj. MSBuild evaluates wwwroot's static
+      # web assets glob once, before any target executes, so a build triggered
+      # mid-publish (however it's hooked in) never makes it into the
+      # *.staticwebassets.endpoints.json manifest that MapStaticAssets() reads
+      # at runtime — confirmed against a real Azure deploy: the page loaded,
+      # but every asset routed through MapStaticAssets() 404'd. Building here
+      # guarantees the files exist on disk before dotnet publish ever starts.
+      - name: Build React app
+        run: npm ci && npm run build
+        working-directory: src/AcmeCatalog.Web/clientapp
+
       - name: Publish Web project
         run: >
           dotnet publish src/AcmeCatalog.Web/AcmeCatalog.Web.csproj
@@ -45,10 +54,9 @@ jobs:
 
       # Kudu's zipdeploy does a clean atomic extract of a zip archive; pointing
       # azure/webapps-deploy at a raw folder instead makes it fall back to an
-      # incremental folder sync, which has repeatedly been unreliable about
-      # picking up newly-added nested directories (this bit us: clientapp-dist/
-      # never made it to the live site even though `dotnet publish` produced it
-      # correctly and CD reported success).
+      # incremental folder sync, which is worth avoiding on general
+      # reliability grounds even though it wasn't the actual cause of the
+      # clientapp-dist bug above (that was the MSBuild timing issue).
       - name: Zip publish output
         run: (cd publish && zip -r ../publish.zip . -x '*.pdb')
 
