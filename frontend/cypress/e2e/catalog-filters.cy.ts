@@ -30,8 +30,6 @@ describe('Catalog price range filter', () => {
   })
 
   it('filters by dragging the min/max range sliders', { tags: '@regression' }, () => {
-    cy.intercept('GET', '/api/items*').as('filtered')
-
     // Native range inputs can't be dragged reliably by mouse coordinates in
     // Cypress. invoke('val', ...) alone isn't enough either: it sets the DOM
     // value directly, bypassing the setter React patches onto the element to
@@ -49,12 +47,25 @@ describe('Catalog price range filter', () => {
 
     setNativeValue('price-min-input', 30)
     setNativeValue('price-max-input', 100)
-    cy.wait('@filtered')
 
+    // Not `cy.wait()`-ing on a single intercepted request here: setting min
+    // then max is two separate state updates, and with no search term the
+    // debounce delay is 0ms (see CatalogGrid's `term ? 300 : 0`), so both
+    // can fire their own fetch. Waiting on "a" matching request risked
+    // catching the intermediate one — min=30 with max still the old 300 —
+    // which is exactly what a real CI failure surfaced (179.99 asserted
+    // "within 30..100"). `.each()` doesn't retry the way `.should()` does —
+    // tried that first, it just fails immediately every time instead of
+    // occasionally, since it runs its callback once against whatever's
+    // already in the DOM rather than polling. `.should(callback)` is the
+    // actual Cypress idiom for "keep re-querying and re-checking until this
+    // holds" — it retries the query it's chained to, not just the
+    // assertion, so it naturally waits out however many fetches land before
+    // the DOM reflects the final min=30/max=100 state.
     cy.getBySel('filter-status').should('be.visible')
-    cy.getBySel('item-price').each(($el) => {
-      const value = Number($el.text().replace(/[^0-9.]/g, ''))
-      expect(value).to.be.within(30, 100)
+    cy.getBySel('item-price').should(($els) => {
+      const values = [...$els].map((el) => Number(el.textContent!.replace(/[^0-9.]/g, '')))
+      values.forEach((value) => expect(value).to.be.within(30, 100))
     })
   })
 })
