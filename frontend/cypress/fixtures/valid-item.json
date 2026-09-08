@@ -1,0 +1,7 @@
+{
+  "name": "Fixture Test Item",
+  "price": 24.99,
+  "category": "Electronics",
+  "description": "A stable, hand-authored payload for tests that just need a valid item and don't care about its exact values.",
+  "imageUrl": null
+}

@@ -1,330 +1,267 @@
 # AcmeCatalog
 
-## Real goal
+## What this is
 
-This app is a portfolio vehicle for demonstrating a full test automation and CI/CD
-pipeline as part of a senior QE / automation engineer job search:
+A small item catalog app used as a practice/portfolio vehicle for real
+microservices architecture, real test-double theory (mocks, stubs, spies,
+resilience), and a real CI/CD pipeline — not a scaffolded demo. It went
+through three architectural eras in the same repo: a server-rendered MVC
+app, a React SPA bolted onto that same backend, and — the current
+state — two independently deployed backend services plus a standalone
+frontend, each with their own database, deployed on their own schedule.
 
-**NUnit (done) → Cypress → JMeter → GitHub Actions**
+The split wasn't done to give a testing tool something to point at. It was
+done because a monolith can't produce genuine inter-service behavior —
+there's nothing real to mock, no real contract to drift, no real resilience
+to test — and that was the actual point of doing this the hard way.
 
-Phase 1 built the application itself plus NUnit tests for the service layer. Phase 2
-(this phase) gave the app a real visual identity, added authentication (cookie-based
-for the MVC site, JWT for the API), Swagger/OpenAPI docs, a health endpoint, and
-consistent API error responses — while keeping every interactive element from Phase 1
-intact. Git, GitHub, Cypress, JMeter, and GitHub Actions are still deliberately **not**
-set up — those remain manual future phases, done by hand, to actually practice the
-tools rather than have them scaffolded.
+## Architecture
 
-## What changed in Phase 2
+```mermaid
+flowchart TB
+    Browser["Browser"]
 
-- **Visual redesign** — a real design system (earthy forest-green + terracotta
-  palette, Sora/Inter type pairing) replacing the generic Bootswatch theme. The
-  homepage became an actual product landing page (hero, live stats pulled from the
-  database, "how it works," reframed value props) instead of template boilerplate.
-  Catalog cards got category-color-coded badges, image hover zoom, and an overlay
-  drag handle. Every page — including the new auth pages — shares the same look.
-- **Authentication** — ASP.NET Core Identity for the MVC site (cookie auth: Register,
-  Login, Logout, Account/Profile pages) and JWT bearer auth for the REST API
-  (`POST /api/auth/login`). See [Authentication](#authentication) below.
-- **Swagger/OpenAPI** — full interactive API docs at `/swagger`, with a JWT bearer
-  "Authorize" flow and accurate per-endpoint lock icons (only endpoints that actually
-  require auth show as secured).
-- **Health check** — `GET /health`, public, checks real SQLite connectivity via EF
-  Core's `AddDbContextCheck`, returns JSON.
-- **Consistent API errors** — every `/api/items` and `/api/auth` error case (401, 404,
-  400 validation) returns a `application/problem+json` body, including auth failures
-  that happen in middleware before a controller action ever runs.
-- **Zero interactive elements removed or simplified.** Every element from Phase 1 —
-  both modals, both iframes, live search, category filter, Load More, drag-and-drop
-  reorder, the image upload dropzone, toasts, tabs, the accordion, and all validation —
-  still exists, still has its original `data-testid`, and still works. See
-  [Verification results](#verification-results) for how that was confirmed.
+    subgraph SWA["Azure Static Web Apps"]
+        Frontend["frontend<br/>React + Vite SPA"]
+    end
 
-## What's built
+    subgraph CAE["Azure Container Apps Environment"]
+        Identity["identity-service<br/>ASP.NET Core"]
+        Catalog["catalog-service<br/>ASP.NET Core"]
+    end
 
-### Architecture
+    IdentityDB[("identity.db<br/>AspNetUsers")]
+    CatalogDB[("catalog.db<br/>Items")]
 
-```
-AcmeCatalog.slnx
-├── src/
-│   ├── AcmeCatalog.Core            Models, Categories, IItemService
-│   ├── AcmeCatalog.Infrastructure  EF Core DbContext (+ Identity), SQLite, DbSeeder, IdentitySeeder, ItemService
-│   └── AcmeCatalog.Web             MVC + Account controllers, REST + Auth API controllers,
-│                                    Security/ (JWT + Swagger auth filter), Helpers/, Razor views, wwwroot
-└── tests/
-    └── AcmeCatalog.Tests           NUnit tests for ItemService (EF Core InMemory)
+    Browser -->|HTTPS| Frontend
+    Frontend -->|"POST /api/auth/login<br/>(CORS, bearer token)"| Identity
+    Frontend -->|"GET/POST /api/items/*<br/>(CORS, bearer token)"| Catalog
+    Catalog -->|"GET /internal/users?ids=<br/>(Polly: timeout+retry+circuit breaker)"| Identity
+    Identity --- IdentityDB
+    Catalog --- CatalogDB
+
+    style Catalog fill:#2d5540,color:#fff
+    style Identity fill:#2d5540,color:#fff
+    style Frontend fill:#c17a4f,color:#fff
 ```
 
-- **AcmeCatalog.Core** — `Item` model, `Categories` constants, `IItemService` interface. No dependencies on anything else.
-- **AcmeCatalog.Infrastructure** — `AcmeCatalogDbContext` (now `IdentityDbContext<IdentityUser>`, so catalog + Identity tables share one SQLite file), `DbSeeder` (10 catalog items), `IdentitySeeder` (the `testuser` account), `ItemService`.
-- **AcmeCatalog.Web** — `ItemsController` / `AccountController` (MVC pages), `Api/ItemsApiController` / `Api/AuthApiController` (REST JSON API), `HomeController`, `Security/JwtTokenService` + `Security/AuthorizeCheckOperationFilter`, `Helpers/CategoryStyleHelper`, Razor views, static assets. Wired together with DI in `Program.cs`.
-- **AcmeCatalog.Tests** — 16 NUnit tests covering `ItemService` CRUD, search/filter, category listing, and the reorder algorithm (unchanged from Phase 1 — `ItemService` itself wasn't touched by the auth/design work).
+Three independently deployable units. **Auth is fully decoupled**:
+catalog-service validates JWTs itself using a signing key shared via config
+— it never calls identity-service to check a token. The one arrow between
+the two services exists for a different, real reason (below), and that's
+deliberate: two services that never talk to each other at runtime would be
+just as useless to test as the monolith was.
 
-### Data model
+### Why catalog-service calls identity-service at all
 
-`Item`: `Id`, `Name`, `Price`, `Description`, `Category`, `ImageUrl`, `SortOrder`, `DateAdded`.
-Seeded with 10 items across 5 categories (Electronics, Home & Kitchen, Sporting Goods,
-Books, Toys & Games). Identity adds the standard `AspNetUsers`/`AspNetRoles`/etc. tables
-to the same database via `IdentityDbContext<IdentityUser>`.
+catalog-service tracks who created each item (`CreatedByUserId` — just an
+opaque id, no shared table, no join). To show "Added by `<username>`" in
+the catalog, it resolves a batch of those ids to display names by calling
+identity-service's own internal endpoint:
 
-### MVC pages (`/Items/...`, `/Account/...`)
+```mermaid
+sequenceDiagram
+    participant C as catalog-service
+    participant P as Polly pipeline
+    participant I as identity-service
 
-| Route | Auth | Purpose |
+    C->>P: GetDisplayNamesAsync([id1, id2, id3])
+    Note over P: one batched call, not 3
+    P->>I: GET /internal/users?ids=id1,id2,id3
+    alt healthy
+        I-->>P: 200 [{id1,"alice"}, {id2,"bob"}]
+        P-->>C: {id1: "alice", id2: "bob"}
+        Note over C: id3 omitted → renders "Unknown"
+    else slow (> 2s)
+        Note over P: Timeout fires, never waits for the real response
+        P-->>C: {} (empty)
+    else identity-service unhealthy (3+ recent failures)
+        Note over P: Circuit breaker is open — doesn't even attempt the call
+        P-->>C: {} (empty)
+    end
+```
+
+This is the one genuine service-to-service dependency in the system, and
+it's guarded by a real resilience policy (`AddIdentityServiceClient` in
+`catalog-service/Services/`), not a bare try/catch:
+
+1. **Timeout (2s)** — a *slow* identity-service has to be treated differently
+   from a *dead* one; without this, a hanging call would hang every catalog
+   page load along with it.
+2. **Retry (1 attempt, 200ms delay)** — absorbs a single transient blip.
+3. **Circuit breaker (opens after 3 failures in 10s, stays open 15s)** —
+   once identity-service is clearly unhealthy, stop hammering it on every
+   catalog request; fail fast locally instead.
+
+The `ShouldHandle` predicate covers both thrown exceptions *and* non-success
+HTTP status codes — the first version of this only handled exceptions,
+which meant a real 500 from identity-service silently never triggered retry
+or the breaker at all. Caught by `IdentityClientResilienceTests` (WireMock.Net
+standing in for identity-service, asserting on real elapsed time — a 6-second
+injected delay against a 2-second timeout has to come back in well under
+4 seconds, not almost-6), not by inspection.
+
+Everywhere else, failure to resolve a name just renders `"Unknown"` — never
+a 500 to the browser. Items with no creator at all (seeded data, from before
+this feature existed) show the same fallback, with no network call at all.
+
+## Services
+
+### identity-service
+
+Owns `AspNetUsers`/`AspNetRoles` and JWT issuance. Nothing else.
+
+| Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /Items` | Public | Catalog grid, first 4 items, search/filter bar, drag-reorder |
-| `GET /Items/LoadMore?skip=N` | Public | AJAX partial — next batch of items (pagination) |
-| `GET /Items/Filter?term=&category=` | Public | AJAX partial — live search / dropdown filter results |
-| `GET /Items/QuickView/{id}` | Public | AJAX partial — modal quick-view content |
-| `GET /Items/ImagePreview/{id}` | Public | Standalone minimal page, embedded via iframe in the quick-view modal |
-| `GET /Items/Details/{id}` | Public | Full item page with Description/Specs tabs |
-| `GET`/`POST /Items/Create` | **Login required** | Add item form (validation, file upload) |
-| `GET`/`POST /Items/Edit/{id}` | **Login required** | Edit item form |
-| `POST /Items/Delete/{id}` | **Login required** | Delete (via confirm modal), CSRF-protected |
-| `POST /Items/Reorder` | **Login required** | AJAX drag-drop reorder, CSRF-protected; see note below |
-| `GET`/`POST /Account/Login`, `/Register` | Public | Auth forms |
-| `POST /Account/Logout` | Login required | Signs out, redirects home |
-| `GET /Account/Profile` | Login required | Shows username/email + logout |
+| `POST /api/auth/login` | Public | Returns `{ token, expiresAtUtc, username }` |
+| `POST /api/auth/register` | Public | Creates a user, returns a token immediately (JWT is stateless — no session to establish) |
+| `GET /api/auth/me` | Bearer | Reads username/email straight from the validated token's claims |
+| `GET /internal/users?ids=` | **None** | The one thing catalog-service calls. Batched; unmatched ids are silently omitted, not errored. *(A real gap, not glossed over: in production this would be restricted at the network layer or behind a service-to-service credential, neither of which is set up here.)* |
+| `GET /health` | Public | Real EF Core connectivity check, not a static "OK" |
 
-> **Note on scope:** the request asked to protect Create/Edit/Delete. Reorder is also a
-> write, so it's protected too for consistency — leaving one mutating endpoint open while
-> everything else required login would be a real inconsistency. Browsing/reading stays
-> fully public everywhere.
+JWTs: HMAC-SHA256, claims `sub`/`unique_name`/`email`/`jti`, 60-minute expiry,
+signing key shared with catalog-service via config (Azure Container Apps
+secret in production, `appsettings.json` locally — the local one is a
+labeled demo key, never used for the deployed instance).
 
-### REST API (`/api/items`, `/api/auth`)
+Seeded test user: **`testuser` / `Test123!`**
 
-| Route | Auth |
-|---|---|
-| `GET /api/items` (supports `?term=&category=`) | Public |
-| `GET /api/items/{id}` | Public |
-| `GET /api/items/categories` | Public |
-| `POST /api/items` | **JWT bearer required** |
-| `PUT /api/items/{id}` | **JWT bearer required** |
-| `DELETE /api/items/{id}` | **JWT bearer required** |
-| `POST /api/auth/login` | Public — returns the JWT |
-| `GET /health` | Public |
+### catalog-service
 
-Full interactive docs, including a "Try it out" + Authorize flow: **`/swagger`**.
+Owns `Items`. Validates JWTs it didn't issue, using nothing but the shared
+signing key.
 
-### Authentication
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /api/items` | Public | Search/filter/sort (`term`, `category`, `sort`, `minPrice`, `maxPrice`) |
+| `GET /api/items/{id}` | Public | Single item |
+| `GET /api/items/categories` | Public | Distinct category list |
+| `POST /api/items` | Bearer | Create — `CreatedByUserId` set from the token's `sub` claim |
+| `PUT /api/items/{id}` | Bearer | Update |
+| `DELETE /api/items/{id}` | Bearer | Delete |
+| `POST /api/items/{id}/image` | Bearer | Multipart upload; returns an absolute `imageUrl` (the frontend is cross-origin now, a relative path would resolve against the wrong host) |
+| `GET /api/items/export` | Public | CSV download |
+| `PUT /api/items/reorder` | Bearer | Drag-and-drop persistence |
+| `GET /Items/ImagePreview/{id}` | Public | Standalone HTML document (not JSON) embedded as the Quick View modal's iframe `src`. Hand-escapes `Name`/`ImageUrl` via `WebUtility.HtmlEncode` — this isn't Razor, so nothing does that automatically, and skipping it would be a stored-XSS hole |
+| `POST /api/test/reset` | Public, **Development-only** | Reseeds the catalog; backs Cypress's `cy.resetDb()`. Returns 404 outside Development by construction, not just by convention |
+| `GET /health` | Public | |
 
-- **MVC (cookie):** ASP.NET Core Identity, `IdentityUser`/`IdentityRole`, custom
-  `AccountController` + Razor views (not the scaffolded Identity UI, so the pages could
-  be styled to match the rest of the app). Unauthenticated visits to a protected page
-  redirect to `/Account/Login?ReturnUrl=...`. The Reorder endpoint is the one exception:
-  since it's called via `fetch` (not a page navigation), its `X-Requested-With` header
-  makes the auth cookie handler return a plain `401` instead of a redirect, so the
-  client-side JS can show an error toast instead of silently "succeeding" against a
-  login page.
-- **API (JWT):** `POST /api/auth/login` with `{ "username": "...", "password": "..." }`
-  returns `{ token, expiresAtUtc, username }`. Send it back as
-  `Authorization: Bearer <token>` on writes. Tokens are HMAC-SHA256 signed, 60-minute
-  expiry, configured under `Jwt:*` in `appsettings.json` (a demo-only secret — not for
-  production use).
-- **Test credentials** (seeded on first run): **`testuser` / `Test123!`**
+`Item`: `Id`, `Name`, `Price`, `Description`, `Category`, `ImageUrl`,
+`SortOrder`, `DateAdded`, `CreatedByUserId` (nullable, opaque string —
+identity-service's id format, never a foreign key into anything since
+there's nothing in this database for it to reference). Seeded with 10 items
+across 5 categories.
 
-### Swagger / OpenAPI
+### frontend
 
-`Swashbuckle.AspNetCore`, available in Development at `/swagger`. A custom
-`AuthorizeCheckOperationFilter` inspects each action for `[Authorize]` and only adds
-the lock icon / 401 response / security requirement to endpoints that actually need a
-token — so `GET /api/items` shows unlocked and `POST /api/items` shows locked, matching
-reality instead of Swashbuckle's blanket-lock default.
+React 19 + Vite + React Router, a fully standalone static site — nothing
+about it assumes it's hosted by either backend. Calls both services
+directly over CORS using env-configured base URLs
+(`VITE_IDENTITY_SERVICE_URL`, `VITE_CATALOG_SERVICE_URL`), baked in at
+build time.
 
-### Health check
+Auth is a bearer token in `localStorage` (`AuthContext.tsx`), never a
+cookie — which is *why* CORS on both services can be a plain allow-list with
+no credentials mode, one less thing to get wrong across three origins.
 
-`GET /health` uses ASP.NET Core's built-in health checks with `AddDbContextCheck`
-against the real `AcmeCatalogDbContext`, so it actually verifies SQLite connectivity
-rather than returning a static "OK." Response:
-```json
-{ "status": "Healthy", "timestampUtc": "...", "checks": [{ "name": "database", "status": "Healthy", "description": null }] }
+## Testing
+
+126 tests across the stack, all real, none decorative:
+
+| Layer | Where | What it actually proves |
+|---|---|---|
+| Backend unit | `tests/CatalogService.Tests/ItemEnricherTests.cs` | Real `ItemEnricher` logic against a **mocked** `IIdentityClient` (Moq) — batches distinct ids into one call, falls back to "Unknown" on a miss or a null creator, all without touching HTTP |
+| Backend resilience | `tests/CatalogService.Tests/IdentityClientResilienceTests.cs` | The *actual* Polly pipeline (`AddIdentityServiceClient`, not a copy) against **WireMock.Net** — real elapsed time for the timeout case, real repeated failures to trip the circuit breaker, verified by counting requests that actually reached the stub server |
+| Backend CRUD | `tests/CatalogService.Tests/ItemServiceTests.cs` | Search/sort/filter/reorder against EF Core InMemory |
+| Backend integration | `tests/IdentityService.Tests/AuthApiTests.cs` | Real ASP.NET Identity stack (not mocked — `UserManager`/`SignInManager` aren't practical to mock) via `WebApplicationFactory` against a throwaway SQLite file per test |
+| Frontend e2e | `frontend/cypress/e2e/**` (74 tests) | Full browser flows against the real running services — login, CRUD, drag-reorder, image upload, CSV export, cookie consent, a11y (axe) |
+| Frontend component | `frontend/cypress/src/**/*.cy.tsx` (18 tests) | Components in isolation, mounted with the app's real CSS (component tests silently had *no* CSS import until this was found via a genuinely-flaky backdrop-click test) |
+
+`npm test`-equivalents: `dotnet test AcmeCatalog.slnx` (backend),
+`npx cypress run` / `npx cypress run --component` (frontend, from `frontend/`).
+
+## CI/CD
+
+```mermaid
+flowchart LR
+    Push["git push → stage"] --> CI["CI: dotnet test<br/>(both services)"]
+    Push -->|"services/identity-service/**"| ICD["identity-service-cd.yml"]
+    Push -->|"services/catalog-service/**"| CCD["catalog-service-cd.yml"]
+    Push -->|"frontend/**"| FCD["frontend-cd.yml"]
+
+    ICD --> Build1["docker build + push"] --> GHCR1[("ghcr.io")] --> Deploy1["az containerapp update"] --> CA1["identity-service"]
+    CCD --> Build2["docker build + push"] --> GHCR2[("ghcr.io")] --> Deploy2["az containerapp update"] --> CA2["catalog-service"]
+    FCD --> Build3["vite build<br/>(bakes in real service URLs)"] --> Deploy3["Static Web Apps deploy"] --> SWA["frontend"]
 ```
 
-### API error responses
+Three independent pipelines, path-filtered so each service ships on its own
+— the actual point of the split, not just its deployment target. Images go
+to **GitHub Container Registry**, not Azure Container Registry: functionally
+identical for this purpose, but ACR's Basic tier runs ~$5/month against
+this project's Azure-for-Students credit for something GHCR does free.
 
-Every `/api/items` and `/api/auth` error path returns `application/problem+json`:
-- **400** — validation errors ( `[ApiController]`'s automatic `ValidationProblem`)
-- **401** — missing/invalid JWT (custom `JwtBearerEvents.OnChallenge`, since the
-  default bearer challenge is just an empty body + `WWW-Authenticate` header) or bad
-  login credentials (`Problem(...)` in `AuthApiController`)
-- **404** — item not found (`Problem(...)` in `ItemsApiController`)
+## Infrastructure
 
-### Persistence
+- **Azure Container Apps** (`acmecatalog-env`, Consumption profile) —
+  `identity-service` and `catalog-service`, each 0.25 vCPU / 0.5Gi,
+  `min-replicas: 0` (scale to zero when idle). A demo-scale app comfortably
+  fits inside Container Apps' always-free allowance (180,000 vCPU-seconds +
+  2M requests/month) — real cost here is $0, not just "should be low."
+- **Azure Static Web Apps** (Free tier) — the frontend.
+- The original single App Service this app used to run on has been deleted
+  — fully superseded, and it was serving the retired monolith by the time
+  it went.
 
-SQLite via EF Core, `Data Source=acmecatalog.db` (created next to the running app).
-Schema is created with `EnsureCreated()` and seeded on first run (catalog items +
-`testuser`) — no formal EF Core migrations, a deliberate simplification since this app
-doesn't need a migration history.
+**Known, deliberate tradeoff**: neither container app has a persistent
+volume, so SQLite data resets on every scale-to-zero cycle or redeploy.
+Both services reseed automatically on startup when their database is
+empty, so this is invisible in practice for a demo — real user-created data
+wouldn't survive it, which would matter for an actual product and doesn't
+for this one. Not solved with more infrastructure on purpose; Azure Files
+mounting is a real, known next step if this ever needed to hold real data.
 
-### Design system
+## Running it locally
 
-Custom CSS-variable-driven theme (`wwwroot/css/site.css`) layered on vanilla Bootstrap
-5.3.3 (bundled locally) — not a prebaked Bootswatch theme. Deep forest green
-(`--brand-primary`) + terracotta accent (`--brand-accent`), warm off-white surfaces,
-Sora for headings / Inter for body text (Google Fonts, degrades gracefully offline).
-Bootstrap's own CSS variables (`--bs-primary`, `--bs-body-font-family`,
-`--bs-border-radius`, etc.) are overridden at `:root` so buttons, badges, modals, and
-focus rings all inherit the brand automatically. Verified responsive down to a 390px
-mobile viewport (real device-metric emulation, not just a narrow desktop window).
-
-### Running it
+Three processes, three terminals:
 
 ```bash
-dotnet build AcmeCatalog.slnx
-dotnet run --project src/AcmeCatalog.Web   # http://localhost:5274, Swagger at /swagger, health at /health
-dotnet test tests/AcmeCatalog.Tests/AcmeCatalog.Tests.csproj --logger "trx;LogFileName=results.trx" --results-directory ./TestResults
+# identity-service — http://localhost:5301
+dotnet run --project services/identity-service
+
+# catalog-service — http://localhost:5302 (needs identity-service running
+# for the enrichment feature to resolve real names; degrades to "Unknown"
+# without it, doesn't fail)
+dotnet run --project services/catalog-service
+
+# frontend — http://localhost:5173, reads .env.development for the two
+# service URLs above
+cd frontend && npm run dev
 ```
-
-#### One-command setup
-
-`scripts/setup.sh` (macOS/Linux) and `scripts/setup.ps1` (Windows) automate the
-above end to end: install the .NET SDK / Node if missing, build the solution,
-run the NUnit suite, install the Cypress deps, start the app in the
-background, and run the Cypress E2E suite against it. Both are safe to
-re-run — they leave an existing `acmecatalog.db` in place (the app
-creates/seeds it itself on first startup) and reuse port 5274.
 
 ```bash
-# macOS/Linux
-./scripts/setup.sh
+# backend tests
+dotnet test AcmeCatalog.slnx
 
-# Windows (PowerShell)
-./scripts/setup.ps1
+# frontend tests (from frontend/)
+npx cypress run              # e2e — needs both services running
+npx cypress run --component  # component — standalone, no backend needed
 ```
 
-When it finishes, the app stays running at http://localhost:5274 (demo login:
-`testuser` / `Test123!`); the script prints the PID to stop it.
+## Known gaps, named rather than hidden
 
-## Verification results
-
-Everything below was confirmed against the **running app via real HTTP requests**
-(curl with cookies/tokens, plus headless-Chrome rendering and CDP-driven interaction
-for anything JS-dependent) — not just a code read-through.
-
-**Pages render (200):** Home, Catalog, Item Details, Add Item, Edit Item, Help,
-Privacy, Login, Register, Account/Profile, `/swagger`, `/health`, the standalone
-`help-content.html` and `ImagePreview` iframes.
-
-**Auth behavior:**
-- Unauthenticated `GET /Items/Create`, `/Items/Edit/1`, `/Account/Profile` → `302` to `/Account/Login?ReturnUrl=...`
-- Unauthenticated `POST /Items/Reorder` with the AJAX header → `401` (not a false-success)
-- Unauthenticated `POST/PUT/DELETE /api/items` → `401` with a ProblemDetails body
-- Login with wrong password (MVC and API) → error shown / `401` ProblemDetails
-- Login with `testuser`/`Test123!` → success, redirects, JWT issued
-- Registration (new account, password confirmation mismatch, successful signup + auto sign-in) → all correct
-- Authenticated Create (with real file upload), Edit, Reorder, Delete via MVC → all succeed
-- Authenticated `POST`/`PUT`/`DELETE /api/items` with a bearer token → `201`/`204`/`204`
-- 404 on a missing item, 400 on invalid input → both ProblemDetails-shaped
-
-**Every pre-existing interactive element — confirmed present (`data-testid` intact) and functional:**
-
-| Element | Confirmed via |
-|---|---|
-| Quick View modal + nested iframe | CDP click → modal opens, name/price populate, iframe `src` loads `/Items/ImagePreview/{id}` |
-| Confirm-delete modal | CDP click on a card's Delete button → modal opens with correct item name/id populated |
-| Standalone Help-page iframe | `help-content.html` returns 200, `#help-frame` present |
-| Category dropdown + live search | CDP: typed "headphones" → debounced fetch → 1 result, status text updated |
-| Async Load More + spinner | `X-Has-More` header correct; button/spinner markup intact |
-| Drag-and-drop reorder (persisted) | Direct API-order check before/after a `Reorder` POST — order actually changes in the DB, then restored |
-| Drag-drop image upload + live preview | Real multipart file upload via curl → file saved, `ImageUrl` set correctly |
-| Auto-dismissing toasts | `toast-host`/`server-toast-data` markup intact; toast JS unchanged |
-| Details page tabs | CDP click on Specs tab → correct pane shown/hidden |
-| Help page FAQ accordion | CDP click → target panel expands (`show` class) |
-| Client + server validation | Empty/invalid Create submit → visible field errors; mismatched Register passwords → error shown |
-
-Zero browser console errors across all pages tested.
-
-**`dotnet test`: 16/16 passed**, TRX at `TestResults/results.trx`.
-
-**Cleanup:** all test items/uploads created during verification were deleted; the
-catalog is back to the original 10 seeded items in original order. Accounts created
-during verification (`verifyuser`) were left in place — they're test users, not catalog
-data, and don't affect the app's seeded state.
-
-## Interactive element map for Cypress planning
-
-Everything below has a `data-testid` attribute (or is a standard Bootstrap
-component with a stable `id`) so selectors won't be a guessing game later. All
-selectors are unchanged from Phase 1 unless noted.
-
-### Catalog page (`/Items`)
-
-| Element | Selector | Behavior |
-|---|---|---|
-| Search box | `[data-testid=search-input]` | As-you-type, 300ms debounce, AJAX fetch to `/Items/Filter`, no page reload |
-| Category dropdown | `[data-testid=category-filter]` | `change` event triggers the same AJAX filter as search |
-| Clear Filters button | `[data-testid=clear-filters-btn]` | Resets inputs, full page reload back to the paginated default view |
-| Filter status text | `[data-testid=filter-status]` | Shows "`N` item(s) found" while a filter is active |
-| Items grid container | `[data-testid=items-container]` | Swapped wholesale by filter, appended to by Load More |
-| Item card | `[data-testid=item-card]` (repeated), `data-item-id` attribute | One per item; draggable; category badge is now color-coded per category |
-| Drag handle | `[data-testid=drag-handle]` | Overlay badge on the card image; the whole card is draggable, not just the handle |
-| Quick View button | `[data-testid=quick-view-btn]` per card | Opens the Quick View modal, AJAX-loads content |
-| Details link | `[data-testid=details-link]` per card | Navigates to `/Items/Details/{id}` |
-| Edit link | `[data-testid=edit-link]` per card | Navigates to `/Items/Edit/{id}` — redirects to Login if not signed in |
-| Delete button | `[data-testid=delete-btn]` per card, `data-item-id`/`data-item-name` | Opens the confirm-delete modal; submit redirects to Login if not signed in |
-| Load More button | `[data-testid=load-more-btn]` | AJAX-fetches next batch; hidden once exhausted or while a filter is active |
-| Load More spinner | `[data-testid=load-more-spinner]` | Visible only during the fetch — good explicit-wait practice target |
-| No-results message | `[data-testid=no-results]` | Shown when a filter matches nothing |
-| Quick View modal | `#quickViewModal` (`[data-testid=quick-view-modal]`) | Bootstrap modal; body populated via AJAX |
-| Quick View modal body | `[data-testid=quick-view-body]` | Contains name/category/price/description **and** a nested iframe |
-| Quick View image iframe | `[data-testid=quick-view-image-frame]` | Iframe inside a modal — the trickiest Cypress combo in the app |
-| Delete confirm modal | `#deleteConfirmModal` (`[data-testid=delete-modal]`) | Bootstrap modal, populated from the triggering button's `data-*` attrs |
-| Delete item name | `[data-testid=delete-item-name]` | Shows the name of the item about to be deleted |
-| Confirm delete button | `[data-testid=confirm-delete-btn]` | Submits a real POST form (not AJAX); requires login |
-| Add Item nav button | `[data-testid=add-item-btn]` | Links to `/Items/Create`; requires login |
-
-### Details page (`/Items/Details/{id}`)
-
-| Element | Selector | Behavior |
-|---|---|---|
-| Description tab | `[data-testid=tab-description]` | Bootstrap tab, active by default |
-| Specs tab | `[data-testid=tab-specs]` | Shows SKU, Category, Date Added, Catalog Position |
-| Tab panels | `[data-testid=tab-panel-description]`, `[data-testid=tab-panel-specs]` | Only one visible at a time |
-
-### Create / Edit forms (`/Items/Create`, `/Items/Edit/{id}`) — login required
-
-| Element | Selector | Behavior |
-|---|---|---|
-| Form | `[data-testid=item-form]` | `enctype="multipart/form-data"`, `novalidate` (validation is JS-driven) |
-| Validation summary | `[data-testid=validation-summary]` | Only rendered when there's a server-side error to show (ASP.NET Core tag helper behavior) |
-| Name input | `[data-testid=name-input]` / error at `[data-testid=name-error]` | Required, max 100 chars |
-| Price input | `[data-testid=price-input]` / error at `[data-testid=price-error]` | `type=number`, required, must be > 0 — both client (jQuery unobtrusive validation) and server (`[Range]`) enforce it |
-| Category select | `[data-testid=category-input]` / error at `[data-testid=category-error]` | Required |
-| Description textarea | `[data-testid=description-input]` / error at `[data-testid=description-error]` | Required, max 1000 chars |
-| Image dropzone | `[data-testid=image-dropzone]` | Drag-and-drop **or** click-to-browse; shows a live thumbnail preview before submit |
-| Image file input | `[data-testid=image-file-input]` | Native `<input type=file>` inside the dropzone |
-| Image preview thumbnail | `[data-testid=image-preview]` | Hidden until a file is chosen/dropped |
-| Image URL input | `[data-testid=image-url-input]` | Fallback to uploading — paste a URL instead |
-| Submit button | `[data-testid=submit-btn]` | On success, redirects to `/Items` and shows a toast |
-
-### Toast notifications
-
-Shown after Create/Edit/Delete/Reorder succeed (or Reorder fails while logged out).
-Bootstrap `.toast` component, auto-dismisses after 4 seconds, `role=alert`. Selector:
-`[data-testid=toast-notification]` (created dynamically — only exists after a
-triggering action). Reorder toasts appear without a page navigation; Create/Edit/Delete
-toasts are carried across the redirect via `TempData`.
-
-### Help page (`/Home/Help`)
-
-| Element | Behavior |
-|---|---|
-| `#help-frame` iframe | Embeds the standalone static document `/help-content.html` |
-| FAQ accordion (`#faq-accordion`) | Four Bootstrap accordion items (added one about accounts), first expanded by default |
-
-### Auth pages (new in Phase 2)
-
-| Element | Selector | Behavior |
-|---|---|---|
-| Nav login/register/account links | `[data-testid=login-nav-link]`, `[data-testid=register-nav-link]`, `[data-testid=account-nav-link]`, `[data-testid=logout-btn]` | Swap based on sign-in state |
-| Login form | `[data-testid=login-form]`, inputs `login-username-input`/`login-password-input`/`login-remember-input`, `login-submit-btn`, errors `login-username-error`/`login-password-error`, summary `login-error-summary` | Server-side auth check; wrong credentials show the summary error |
-| Register form | `[data-testid=register-form]`, inputs `register-username-input`/`register-email-input`/`register-password-input`/`register-confirm-password-input`, `register-submit-btn`, matching `-error` spans, summary `register-error-summary` | Client + server validation (required fields, email format, password match via `[Compare]`) |
-| Profile page | `[data-testid=profile-card]`, `profile-username`, `profile-email`, `profile-logout-btn` | Login-required page showing the signed-in user |
-
-## Future Phases (manual, by Ramish)
-
-These are intentionally **not** started. Doing them by hand is the point.
-
-1. **Git & GitHub setup** — `git init`, initial commit, create the GitHub repo, push.
-2. **Cypress E2E + API tests** — drive the interactive elements mapped above, including the login flow (cookie) and `/api/auth/login` (JWT) as setup steps for protected-route tests.
-3. **JMeter performance tests** — load-test `/api/items` (including an authenticated write scenario using a JWT) and the MVC catalog pages.
-4. **GitHub Actions CI/CD** — pipeline that runs `dotnet test`, the Cypress suite, and (optionally) a JMeter smoke run on push/PR.
+- **`frontend/src/types.ts` is hand-synced** with both services' DTOs — a
+  comment says so, but nothing enforces it. Renaming a backend field breaks
+  the frontend silently at runtime, not at compile time. Generating this
+  from each service's OpenAPI spec (`/swagger/v1/swagger.json`, already
+  exposed by both) would close this; not done yet.
+- **`GET /internal/users` has no access restriction** beyond "it's an
+  endpoint that exists." A real deployment would put it behind network
+  policy or a service-to-service credential.
+- **No API gateway** — the frontend calls both services directly. A BFF
+  (YARP would be the idiomatic .NET choice) is a natural next step if a
+  single frontend-facing origin or more contract-testing surface is wanted
+  later.
+- **No contract testing yet.** The plan (Pact, real boundaries: catalog↔identity
+  first since it's genuine backend-to-backend, then each frontend↔service
+  pair, published to a real PactFlow broker rather than files shuffled
+  between CI jobs) is written but not started.

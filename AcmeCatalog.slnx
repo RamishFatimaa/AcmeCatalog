@@ -1,10 +1,10 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/AcmeCatalog.Core/AcmeCatalog.Core.csproj" />
-    <Project Path="src/AcmeCatalog.Infrastructure/AcmeCatalog.Infrastructure.csproj" />
-    <Project Path="src/AcmeCatalog.Web/AcmeCatalog.Web.csproj" />
+  <Folder Name="/services/">
+    <Project Path="services/identity-service/IdentityService.csproj" />
+    <Project Path="services/catalog-service/CatalogService.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/AcmeCatalog.Tests/AcmeCatalog.Tests.csproj" />
+    <Project Path="tests/IdentityService.Tests/IdentityService.Tests.csproj" />
+    <Project Path="tests/CatalogService.Tests/CatalogService.Tests.csproj" />
   </Folder>
 </Solution>
