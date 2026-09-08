@@ -65,17 +65,17 @@ sequenceDiagram
     participant P as Polly pipeline
     participant I as identity-service
 
-    C->>P: GetDisplayNamesAsync([id1, id2, id3])
-    Note over P: one batched call, not 3
-    P->>I: GET /internal/users?ids=id1,id2,id3
+    C->>P: GetDisplayNamesAsync([userId-8a17be09, userId-f4c22e91])
+    Note over P: one batched call, not one per item
+    P->>I: GET /internal/users?ids=8a17be09...,f4c22e91...
     alt healthy
-        I-->>P: 200 [{id1,"alice"}, {id2,"bob"}]
-        P-->>C: {id1: "alice", id2: "bob"}
-        Note over C: id3 omitted → renders "Unknown"
+        I-->>P: 200 [{8a17be09,"testuser"}, {f4c22e91,"jsmith"}]
+        P-->>C: {8a17be09: "testuser", f4c22e91: "jsmith"}
+        Note over C: an id with no match is omitted → renders "Unknown"
     else slow (> 2s)
-        Note over P: Timeout fires, never waits for the real response
+        Note over P: Timeout fires — never waits for the real response
         P-->>C: {} (empty)
-    else identity-service unhealthy (3+ recent failures)
+    else identity-service unhealthy (3+ failures in 10s)
         Note over P: Circuit breaker is open — doesn't even attempt the call
         P-->>C: {} (empty)
     end
@@ -182,23 +182,74 @@ no credentials mode, one less thing to get wrong across three origins.
 
 ## CI/CD
 
-```mermaid
-flowchart LR
-    Push["git push → stage"] --> CI["CI: dotnet test<br/>(both services)"]
-    Push -->|"services/identity-service/**"| ICD["identity-service-cd.yml"]
-    Push -->|"services/catalog-service/**"| CCD["catalog-service-cd.yml"]
-    Push -->|"frontend/**"| FCD["frontend-cd.yml"]
+Two workflows on **GitHub Actions**: `ci.yml` runs on every push/PR;
+`identity-service-cd.yml` / `catalog-service-cd.yml` / `frontend-cd.yml` are
+independent, path-filtered deploy pipelines that only fire on `stage`.
 
-    ICD --> Build1["docker build + push"] --> GHCR1[("ghcr.io")] --> Deploy1["az containerapp update"] --> CA1["identity-service"]
-    CCD --> Build2["docker build + push"] --> GHCR2[("ghcr.io")] --> Deploy2["az containerapp update"] --> CA2["catalog-service"]
-    FCD --> Build3["vite build<br/>(bakes in real service URLs)"] --> Deploy3["Static Web Apps deploy"] --> SWA["frontend"]
+### CI (`ci.yml`) — 8 jobs
+
+```mermaid
+flowchart TB
+    Trigger(["push or pull_request"]) --> GHA["GitHub Actions: ci.yml"]
+
+    GHA --> BT["backend-tests<br/>dotnet test — NUnit, Moq, WireMock.Net"]
+    GHA --> CT["component-tests<br/>Cypress --component, real app CSS, no backend"]
+    GHA --> ES["e2e-smoke ×2 (parallel)<br/>Cypress, @smoke tag"]
+    GHA --> ER["e2e-regression ×3 (parallel)<br/>Cypress, stage branch only"]
+    GHA --> AI["ai-prompt-demo<br/>cy.prompt(), continue-on-error"]
+
+    ES --> Boot["Boot both services + real Vite dev server,<br/>health-check before Cypress runs at all"]
+    ER --> Boot
+    AI --> Boot
+
+    Boot --> Cloud[("Cypress Cloud<br/>recorded results, parallel run grouping")]
+
+    style GHA fill:#2d5540,color:#fff
+    style Cloud fill:#c17a4f,color:#fff
 ```
 
-Three independent pipelines, path-filtered so each service ships on its own
-— the actual point of the split, not just its deployment target. Images go
-to **GitHub Container Registry**, not Azure Container Registry: functionally
-identical for this purpose, but ACR's Basic tier runs ~$5/month against
-this project's Azure-for-Students credit for something GHCR does free.
+Every Cypress job boots both real services plus the actual Vite dev server
+and health-checks all three before a single test runs — the automated form
+of the exact manual sequence used to verify the split by hand. This wasn't
+written and assumed correct: the first real run of this workflow caught two
+genuine bugs immediately —
+
+1. `cypress-io/github-action@v6` has no `key` input at all in this version
+   (only `CYPRESS_RECORD_KEY` as an env var); `component-tests` still had
+   the old form and failed outright with an "unexpected input" error.
+2. `catalog-filters.cy.ts`'s range-slider test had a real race: dragging min
+   then max is two state updates, and with no search term the debounce is
+   0ms, so both can fire their own fetch. `cy.wait('@filtered')` only waits
+   for *one* match — on a CI runner slow enough to keep the two requests
+   separate, it caught the intermediate one (min updated, max still the old
+   default) and asserted a $179.99 item was "within 30..100". It passed
+   100% of the time locally, by luck of faster timing, not because it was
+   correct. Fixed by replacing the wait with `.should(callback)` — the
+   Cypress idiom that actually retries the query, not just the assertion —
+   and verified 5/5 locally before trusting it in CI again.
+
+### CD — three independent deploys
+
+```mermaid
+flowchart LR
+    Push(["git push → stage"]) --> GHA["GitHub Actions"]
+
+    GHA -->|"path: services/identity-service/**"| ICD["identity-service-cd.yml"]
+    GHA -->|"path: services/catalog-service/**"| CCD["catalog-service-cd.yml"]
+    GHA -->|"path: frontend/**"| FCD["frontend-cd.yml"]
+
+    ICD --> B1["docker build"] --> G1[("ghcr.io")] --> D1["az containerapp update"] --> R1["identity-service<br/>Azure Container Apps"]
+    CCD --> B2["docker build"] --> G2[("ghcr.io")] --> D2["az containerapp update"] --> R2["catalog-service<br/>Azure Container Apps"]
+    FCD --> B3["vite build<br/>bakes in real service URLs"] --> D3["Azure/static-web-apps-deploy"] --> R3["frontend<br/>Azure Static Web Apps"]
+
+    style GHA fill:#2d5540,color:#fff
+```
+
+Path-filtered so each service ships on its own schedule — the actual point
+of the split, not just its deployment target. Images go to **GitHub
+Container Registry**, not Azure Container Registry: functionally identical
+for this purpose, but ACR's Basic tier runs ~$5/month against this
+project's Azure-for-Students credit for something GHCR does free.
 
 ## Infrastructure
 
