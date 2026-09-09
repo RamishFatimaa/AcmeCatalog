@@ -131,6 +131,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('push-job-timing: non-fatal error, CI job continues:', err?.message ?? err)
+  console.log(`::warning::push-job-timing failed, dashboard data will be incomplete for this run: ${err?.message ?? err}`)
   process.exit(0)
 })

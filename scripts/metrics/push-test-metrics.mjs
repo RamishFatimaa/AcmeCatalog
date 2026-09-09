@@ -246,6 +246,11 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('push-test-metrics: non-fatal error, CI job continues:', err?.message ?? err)
+  // A GitHub Actions warning annotation, not error/exit-1: this must never
+  // fail the real test job it's attached to, but a metrics push failing
+  // silently (only visible if someone happens to read this step's log) is
+  // exactly the kind of invisible failure this whole pipeline exists to
+  // stop happening to actual tests — it shouldn't happen to itself unnoticed.
+  console.log(`::warning::push-test-metrics failed, dashboard data will be incomplete for this run: ${err?.message ?? err}`)
   process.exit(0)
 })
