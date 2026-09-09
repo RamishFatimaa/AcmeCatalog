@@ -70,6 +70,9 @@ export function QuickViewModal({ item, onClose }: QuickViewModalProps) {
                     {item.price.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
                   </p>
                   <p data-testid="quick-view-description">{item.description}</p>
+                  <p className="text-muted small" data-testid="quick-view-created-by">
+                    Added by {item.createdByDisplayName}
+                  </p>
                 </div>
               </div>
             )}

@@ -110,6 +110,75 @@ public class IdentityClientResilienceTests
     }
 
     [Test]
+    public async Task GetDisplayNamesAsync_TransientFailureThenSuccess_RetryRecoversTheRealName()
+    {
+        // The only existing failure test (ServerError_...) hits 500 on every
+        // call, which never distinguishes "retry fired and helped" from
+        // "retry is configured but pointless". WireMock's scenario/state
+        // machine is what lets a single client call see two different
+        // responses across its internal retry attempt.
+        const string scenario = "one-transient-failure";
+        _server
+            .Given(Request.Create().WithPath("/internal/users").UsingGet())
+            .InScenario(scenario)
+            .WillSetStateTo("failed-once")
+            .RespondWith(Response.Create().WithStatusCode(500));
+
+        _server
+            .Given(Request.Create().WithPath("/internal/users").UsingGet())
+            .InScenario(scenario)
+            .WhenStateIs("failed-once")
+            .RespondWith(Response.Create()
+                .WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("""[{"id":"user-1","username":"alice"}]"""));
+
+        var result = await _client.GetDisplayNamesAsync(new[] { "user-1" });
+
+        Assert.That(result["user-1"], Is.EqualTo("alice"),
+            "the configured single retry (MaxRetryAttempts=1) should have absorbed one transient 500 and returned the real name, not fallen back to empty");
+    }
+
+    [Test]
+    public async Task GetDisplayNamesAsync_AfterBreakDurationElapses_CircuitClosesAndResolvesAgain()
+    {
+        // The docs claim the breaker "closes again" once identity-service
+        // recovers — a real production question (does this ever come back,
+        // or degrade permanently until restart) that nothing currently
+        // asserts. Uses its own short-BreakDuration client so the test
+        // doesn't need to wait out the real 15s production value.
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddIdentityServiceClient(_server.Url!, breakDuration: TimeSpan.FromSeconds(1));
+        await using var provider = services.BuildServiceProvider();
+        var client = provider.GetRequiredService<IIdentityClient>();
+
+        _server
+            .Given(Request.Create().WithPath("/internal/users").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(500));
+
+        for (var i = 0; i < 10; i++)
+        {
+            await client.GetDisplayNamesAsync(new[] { "user-1" });
+        }
+
+        _server.ResetMappings();
+        _server
+            .Given(Request.Create().WithPath("/internal/users").UsingGet())
+            .RespondWith(Response.Create()
+                .WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody("""[{"id":"user-1","username":"alice"}]"""));
+
+        await Task.Delay(TimeSpan.FromSeconds(1.5));
+
+        var result = await client.GetDisplayNamesAsync(new[] { "user-1" });
+
+        Assert.That(result["user-1"], Is.EqualTo("alice"),
+            "once BreakDuration has elapsed and identity-service is healthy again, the breaker should close and resolve real names, not stay open forever");
+    }
+
+    [Test]
     public async Task GetDisplayNamesAsync_RepeatedFailures_OpensCircuitAndStopsCallingOut()
     {
         _server

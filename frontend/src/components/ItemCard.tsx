@@ -109,6 +109,9 @@ export function ItemCard({
               </span>
             )}
           </p>
+          <p className="card-text text-muted small mb-2" data-testid="item-created-by">
+            Added by {item.createdByDisplayName}
+          </p>
           <div className="mt-auto d-flex flex-wrap gap-2">
             <button
               type="button"

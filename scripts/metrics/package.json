@@ -1,0 +1,11 @@
+{
+  "name": "acmecatalog-metrics",
+  "private": true,
+  "type": "module",
+  "description": "CI-side scripts that push test/job results into Azure Table Storage and render the quality dashboard. Deliberately its own package, not part of frontend/ — backend-tests shouldn't need the React/Cypress toolchain installed just to push metrics.",
+  "dependencies": {
+    "@azure/data-tables": "^13.3.2",
+    "@azure/identity": "^4.13.2",
+    "fast-xml-parser": "^5.11.1"
+  }
+}

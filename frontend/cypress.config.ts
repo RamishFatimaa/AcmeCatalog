@@ -1,6 +1,7 @@
 import { defineConfig } from 'cypress'
 import installLogsPrinter from 'cypress-terminal-report/src/installLogsPrinter'
 import { plugin as cypressGrepPlugin } from '@cypress/grep/plugin'
+import { recordAttempts } from './cypress/plugins/recordAttempts'
 
 // One Cypress project, two testing types: `component` mounts React
 // components in isolation (needs this directory's own Vite/React tooling);
@@ -35,6 +36,7 @@ export default defineConfig({
       // e2e:smoke/e2e:regression scripts) to filter which tests run, and
       // this half additionally skips loading specs with zero matching tests.
       cypressGrepPlugin(config)
+      recordAttempts(on)
       return config
     },
   },
@@ -42,6 +44,9 @@ export default defineConfig({
     devServer: {
       framework: 'react',
       bundler: 'vite',
+    },
+    setupNodeEvents(on) {
+      recordAttempts(on)
     },
   },
 })

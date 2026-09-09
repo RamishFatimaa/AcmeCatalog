@@ -17,10 +17,10 @@ export function LoginForm({ onSuccess }: { onSuccess?: () => void }) {
       await login(username, password)
       onSuccess?.()
     } catch (err) {
-      if (err instanceof ApiError) {
+      if (err instanceof ApiError && err.status === 401) {
         setError(err.problem?.detail ?? 'Username or password is incorrect.')
       } else {
-        setError('Something went wrong logging in.')
+        setError('Something went wrong logging in. Please try again.')
       }
     } finally {
       setSubmitting(false)

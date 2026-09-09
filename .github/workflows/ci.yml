@@ -9,6 +9,10 @@ permissions:
   contents: read
   checks: write
   pull-requests: write
+  id-token: write
+
+env:
+  METRICS_STORAGE_ACCOUNT: acmecatalogmetrics
 
 jobs:
   backend-tests:
@@ -36,11 +40,18 @@ jobs:
       # AddIdentityServiceClient resilience pipeline — timeout, retry, and
       # circuit-breaker behavior against real elapsed time, not a mocked
       # clock).
+      # No fixed LogFileName: AcmeCatalog.slnx runs two test projects in this
+      # one invocation, and a fixed name meant the second project's TRX
+      # silently overwrote the first's in ./TestResults — dorny/test-reporter
+      # below was only ever reporting CatalogService.Tests' results, never
+      # IdentityService.Tests'. Letting dotnet auto-name each project's file
+      # (it includes the assembly name) fixes both this step's glob and the
+      # metrics push below.
       - name: Run backend tests
         run: >
           dotnet test AcmeCatalog.slnx
           --no-build --configuration Release
-          --logger "trx;LogFileName=results.trx"
+          --logger "trx"
           --results-directory ./TestResults
 
       - name: Upload test results
@@ -57,6 +68,37 @@ jobs:
           name: Backend Tests (NUnit)
           path: 'TestResults/*.trx'
           reporter: dotnet-trx
+
+      # Feeds the quality dashboard (scripts/metrics) — its own small
+      # package, not frontend/, so this job doesn't need the React/Cypress
+      # toolchain installed just to push 43 rows of test results.
+      - name: Setup Node
+        if: always()
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/metrics/package-lock.json
+
+      - name: Install metrics dependencies
+        if: always()
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        if: always()
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push test metrics
+        if: always()
+        working-directory: scripts/metrics
+        env:
+          METRICS_JOB_NAME: backend-tests
+        run: node push-test-metrics.mjs dotnet ../../TestResults
 
   component-tests:
     runs-on: ubuntu-latest
@@ -90,6 +132,26 @@ jobs:
         env:
           COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+      - name: Install metrics dependencies
+        if: always()
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        if: always()
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push test metrics
+        if: always()
+        working-directory: scripts/metrics
+        env:
+          METRICS_JOB_NAME: component-tests
+        run: node push-test-metrics.mjs cypress ../../frontend/cypress/results
 
   # Both backend services + the real Vite dev server, health-checked before
   # Cypress ever runs — this is exactly the manual sequence used to verify
@@ -162,6 +224,12 @@ jobs:
       # --record directly and exporting CYPRESS_RECORD_KEY as a plain env
       # var is what Cypress's CLI actually reads, regardless of the action's
       # own flag-building.
+      # --ci-build-id groups these matrix jobs into one Cypress Cloud run so
+      # it can load-balance individual spec files across them; without it
+      # (the state this was in before) each matrix job just ran the entire
+      # @smoke suite on its own, twice over, for zero speedup. It's suffixed
+      # -smoke so this group never collides with e2e-regression's build id
+      # further down, even though both derive from the same run_id.
       - name: Run E2E smoke suite
         uses: cypress-io/github-action@v6
         with:
@@ -170,10 +238,31 @@ jobs:
           start: npm run dev
           wait-on: 'http://localhost:5173'
           wait-on-timeout: 90
-          command: npm run e2e:smoke -- --record
+          command: npm run e2e:smoke -- --record --parallel --ci-build-id ${{ github.run_id }}-smoke --group e2e-smoke
         env:
           COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+      - name: Install metrics dependencies
+        if: always()
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        if: always()
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push test metrics
+        if: always()
+        working-directory: scripts/metrics
+        env:
+          METRICS_JOB_NAME: e2e-smoke
+          METRICS_MATRIX_INDEX: ${{ matrix.containers }}
+        run: node push-test-metrics.mjs cypress ../../frontend/cypress/results
 
   e2e-regression:
     runs-on: ubuntu-latest
@@ -239,10 +328,31 @@ jobs:
           start: npm run dev
           wait-on: 'http://localhost:5173'
           wait-on-timeout: 90
-          command: npm run e2e:regression -- --record
+          command: npm run e2e:regression -- --record --parallel --ci-build-id ${{ github.run_id }}-regression --group e2e-regression
         env:
           COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+      - name: Install metrics dependencies
+        if: always()
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        if: always()
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push test metrics
+        if: always()
+        working-directory: scripts/metrics
+        env:
+          METRICS_JOB_NAME: e2e-regression
+          METRICS_MATRIX_INDEX: ${{ matrix.containers }}
+        run: node push-test-metrics.mjs cypress ../../frontend/cypress/results
 
   ai-prompt-demo:
     runs-on: ubuntu-latest
@@ -310,3 +420,98 @@ jobs:
           command: npm run e2e:ai-demo
         env:
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+  # Sourced from the GitHub Actions API itself, after every gating job has
+  # finished, rather than each job self-reporting its own timing — the API
+  # already has exact runner-perspective start/end for every job *and* every
+  # step (including the "Start identity-service"/"Start catalog-service"
+  # health-check steps), which is what lets the dashboard split real test
+  # execution from boot/health-check dead time without touching those bash
+  # curl loops at all. Deliberately excludes ai-prompt-demo — non-gating,
+  # not part of the suite-health story.
+  record-job-timing:
+    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/metrics/package-lock.json
+
+      - name: Install metrics dependencies
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push job timing
+        working-directory: scripts/metrics
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node push-job-timing.mjs
+
+  # Regenerates the 5-page quality dashboard from whatever's now in Azure
+  # Table Storage (including this run's own just-pushed rows) and deploys it
+  # to its own dedicated Static Web App — separate from the frontend's,
+  # deliberately: this redeploys on every push/PR, not just stage, and
+  # Azure/static-web-apps-deploy@v1 replaces an app's whole deployed content
+  # per deploy, so sharing one app with the frontend would mean every CI run
+  # here also re-deploys (or races) the production React app.
+  publish-dashboard:
+    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression, record-job-timing]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/metrics/package-lock.json
+
+      - name: Install metrics dependencies
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Generate dashboard
+        working-directory: scripts/metrics
+        run: node generate-dashboard.mjs
+
+      - name: Deploy dashboard
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_DASHBOARD }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: 'scripts/metrics'
+          output_location: 'dist'
+          skip_app_build: true

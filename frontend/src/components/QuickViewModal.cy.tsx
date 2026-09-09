@@ -29,6 +29,13 @@ describe('<QuickViewModal />', () => {
     cy.get('[data-testid=quick-view-price]').should('have.text', '$16.99')
     cy.get('[data-testid=quick-view-category]').should('contain.text', 'Books')
     cy.get('[data-testid=quick-view-description]').should('have.text', sampleItem.description)
+    cy.get('[data-testid=quick-view-created-by]').should('have.text', 'Added by testuser')
+  })
+
+  it('shows "Unknown" when the creator could not be resolved', () => {
+    cy.mount(<QuickViewModal item={{ ...sampleItem, createdByDisplayName: 'Unknown' }} onClose={cy.stub()} />)
+
+    cy.get('[data-testid=quick-view-created-by]').should('have.text', 'Added by Unknown')
   })
 
   it('points the iframe at this item\'s ImagePreview route', () => {

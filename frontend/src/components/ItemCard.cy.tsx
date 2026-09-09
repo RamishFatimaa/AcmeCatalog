@@ -39,6 +39,51 @@ describe('<ItemCard />', () => {
     cy.get('[data-testid=item-category]').should('have.text', 'Electronics')
   })
 
+  it('shows who added the item', () => {
+    cy.mount(
+      <ItemCard
+        item={sampleItem}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
+        isAuthenticated={false}
+        onQuickView={noop}
+        onEdit={noop}
+        onDelete={noop}
+        onDragStart={noop}
+        onDragOver={noop}
+        onDragEnd={noop}
+      />,
+    )
+
+    cy.get('[data-testid=item-created-by]').should('have.text', 'Added by testuser')
+  })
+
+  it('shows "Unknown" when the creator could not be resolved', () => {
+    // The real value catalog-service sends when identity-service couldn't
+    // resolve the id (down, slow, or the id itself was never matched) —
+    // ItemResponse.From's actual fallback, not a placeholder.
+    cy.mount(
+      <ItemCard
+        item={{ ...sampleItem, createdByDisplayName: 'Unknown' }}
+        layout="grid"
+        selected={false}
+        onToggleSelect={noop}
+        onViewDetail={noop}
+        isAuthenticated={false}
+        onQuickView={noop}
+        onEdit={noop}
+        onDelete={noop}
+        onDragStart={noop}
+        onDragOver={noop}
+        onDragEnd={noop}
+      />,
+    )
+
+    cy.get('[data-testid=item-created-by]').should('have.text', 'Added by Unknown')
+  })
+
   it('hides authenticated-only controls for anonymous viewers', () => {
     cy.mount(
       <ItemCard

@@ -67,6 +67,31 @@ describe('<ItemForm /> — create mode', () => {
     })
   })
 
+  it('disables the submit button while a submission is pending, blocking a duplicate call', () => {
+    // Real defense in ItemForm.tsx (disabled={submitting}), never exercised
+    // before — a rapid double-click here is exactly how a duplicate item
+    // gets created in production. onSubmit is held pending deliberately so
+    // the second click lands while submitting is still true.
+    let resolveSubmit: (() => void) | undefined
+    const onSubmit = cy
+      .stub()
+      .as('onSubmit')
+      .callsFake(() => new Promise<void>((resolve) => { resolveSubmit = resolve }))
+    cy.mount(<ItemForm onSubmit={onSubmit} onCancel={cy.stub()} />)
+
+    cy.get('[data-testid=name-input]').type('Something')
+    cy.get('[data-testid=price-input]').type('10')
+    cy.get('[data-testid=category-input]').select('Electronics')
+    cy.get('[data-testid=description-input]').type('A description.')
+
+    cy.get('[data-testid=submit-btn]').click()
+    cy.get('[data-testid=submit-btn]').should('be.disabled')
+    cy.get('[data-testid=submit-btn]').click({ force: true })
+
+    cy.get('@onSubmit').should('have.been.calledOnce')
+    cy.then(() => resolveSubmit?.())
+  })
+
   it('clears a field error as soon as the field is fixed and resubmitted', () => {
     cy.mount(<ItemForm onSubmit={cy.stub().resolves()} onCancel={cy.stub()} />)
 

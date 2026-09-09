@@ -166,16 +166,37 @@ no credentials mode, one less thing to get wrong across three origins.
 
 ## Testing
 
-126 tests across the stack, all real, none decorative:
+153 tests across the stack, all real, none decorative:
 
 | Layer | Where | What it actually proves |
 |---|---|---|
 | Backend unit | `tests/CatalogService.Tests/ItemEnricherTests.cs` | Real `ItemEnricher` logic against a **mocked** `IIdentityClient` (Moq) — batches distinct ids into one call, falls back to "Unknown" on a miss or a null creator, all without touching HTTP |
-| Backend resilience | `tests/CatalogService.Tests/IdentityClientResilienceTests.cs` | The *actual* Polly pipeline (`AddIdentityServiceClient`, not a copy) against **WireMock.Net** — real elapsed time for the timeout case, real repeated failures to trip the circuit breaker, verified by counting requests that actually reached the stub server |
+| Backend resilience | `tests/CatalogService.Tests/IdentityClientResilienceTests.cs` | The *actual* Polly pipeline (`AddIdentityServiceClient`, not a copy) against **WireMock.Net** — real elapsed time for the timeout case, real repeated failures to trip the circuit breaker (by request count), a WireMock scenario/state stub proving a single retry actually recovers a transient 500, and a short-`BreakDuration` override proving the breaker closes again once identity-service recovers, not just that it opens |
 | Backend CRUD | `tests/CatalogService.Tests/ItemServiceTests.cs` | Search/sort/filter/reorder against EF Core InMemory |
+| Backend HTTP pipeline | `tests/CatalogService.Tests/ItemsApiTests.cs` | Real `WebApplicationFactory` test against catalog-service's *own* controllers/`[Authorize]`/routing — not just the service class — including tokens minted with the service's own trusted key to prove an expired, forged-signature, or wrong-issuer JWT is actually rejected, not just a missing one |
 | Backend integration | `tests/IdentityService.Tests/AuthApiTests.cs` | Real ASP.NET Identity stack (not mocked — `UserManager`/`SignInManager` aren't practical to mock) via `WebApplicationFactory` against a throwaway SQLite file per test |
-| Frontend e2e | `frontend/cypress/e2e/**` (74 tests) | Full browser flows against the real running services — login, CRUD, drag-reorder, image upload, CSV export, cookie consent, a11y (axe) |
-| Frontend component | `frontend/cypress/src/**/*.cy.tsx` (18 tests) | Components in isolation, mounted with the app's real CSS (component tests silently had *no* CSS import until this was found via a genuinely-flaky backdrop-click test) |
+| Frontend e2e | `frontend/cypress/e2e/**` (79 tests) | Full browser flows against the real running services — login, CRUD, drag-reorder, image upload, CSV export, cookie consent, a11y (axe); plus `auth-resilience.cy.ts`, which stubs identity-service 500s/network failures/slow responses via `cy.intercept()`, and an expired-session test proving `AuthContext.tsx`'s stored-token expiry check actually governs the UI |
+| Frontend component | `frontend/src/components/**/*.cy.tsx` (31 tests) | Components in isolation, mounted with the app's real CSS; includes a `cy.stub()`-based spy proving `ItemForm`'s submit button actually blocks a duplicate call while a save is pending, and `CatalogGrid.cy.tsx` — the largest, most stateful component (search, sort, filters, pagination, bulk actions, drag-reorder) — going from zero component tests to nine |
+
+`auth-resilience.cy.ts`'s first test is a real regression test: it caught a
+genuine bug where `LoginForm.tsx` treated *any* API error as bad credentials,
+so a real identity-service outage (a 500) told the user their password was
+wrong. Confirmed by reverting the fix locally and re-running the suite — the
+test failed exactly as expected, then passed once `LoginForm.tsx` was
+corrected to only show that message for a real 401. Separately, `ItemCard`/
+`QuickViewModal` render `createdByDisplayName` for the first time in this
+pass — the field existed on the `Item` type and was fully resolved by
+identity-service already, but nothing in the UI ever displayed it.
+
+A later pass audited the test-strategy doc's own traceability matrix and
+closed the two gaps ranked as actually mattering: catalog-service had no test
+of its own HTTP layer (`ItemsApiTests.cs` closes it), and `CatalogGrid.tsx`
+had zero component-level coverage despite being the largest stateful
+component in the frontend. The debounce test's first draft used a faked
+Cypress clock and passed even against a deliberately broken (0ms) debounce —
+faking every timer API also froze whatever React 19 needs to flush its own
+effects. Rewritten to rely on real typing timing instead, which correctly
+failed against the broken version before being trusted.
 
 `npm test`-equivalents: `dotnet test AcmeCatalog.slnx` (backend),
 `npx cypress run` / `npx cypress run --component` (frontend, from `frontend/`).

@@ -56,6 +56,37 @@ describe('Catalog browsing (anonymous)', () => {
     cy.getBySel('item-card').should('not.exist')
   })
 
+  it('renders a stubbed "Unknown" creator without crashing', { tags: '@regression' }, () => {
+    // catalog-service is the only thing that ever calls identity-service for
+    // this — the browser never does — so the one degraded state actually
+    // observable from here is data already resolved to "Unknown" in the
+    // items response, not a network failure to intercept. Stubbing the
+    // real contract value (ItemResponse.From's own fallback) is what proves
+    // the frontend renders it, since nothing else in this suite ever
+    // exercises a value other than a real seeded username.
+    cy.intercept('GET', '/api/items*', {
+      body: [
+        {
+          id: 999,
+          name: 'Orphaned Gadget',
+          price: 9.99,
+          description: 'An item whose creator could not be resolved.',
+          category: 'Electronics',
+          imageUrl: null,
+          sortOrder: 0,
+          dateAdded: '2026-01-01T00:00:00Z',
+          createdByDisplayName: 'Unknown',
+        },
+      ],
+    }).as('unknownCreator')
+
+    cy.getBySel('search-input').type('Orphaned')
+    cy.wait('@unknownCreator')
+
+    cy.getBySel('item-card').should('have.length', 1)
+    cy.getBySel('item-created-by').should('have.text', 'Added by Unknown')
+  })
+
   it('shows a loading indicator while the catalog fetch is in flight', { tags: '@regression' }, () => {
     // Nothing in the app is normally slow enough to observe a loading state.
     // A bare `{ delay }` response object would stub an empty response instead

@@ -79,4 +79,27 @@ describe('Authentication', () => {
     cy.visit('/Account/Profile')
     cy.url().should('include', '/Account/Login')
   })
+
+  it('treats a stored session with a past expiresAtUtc as logged out', { tags: '@regression' }, () => {
+    // Real, previously-untested logic in AuthContext.tsx's readStoredAuth():
+    // an expired stored token is deliberately discarded on load, not just
+    // left to fail on the next API call. Same onBeforeLoad mechanism
+    // loginSession already uses to seed a valid session, here seeding an
+    // already-expired one instead.
+    cy.visit('/Items', {
+      onBeforeLoad: (win) =>
+        win.localStorage.setItem(
+          'acmecatalog.auth',
+          JSON.stringify({
+            token: 'expired-token',
+            username: 'testuser',
+            expiresAtUtc: new Date(Date.now() - 60_000).toISOString(),
+          }),
+        ),
+    })
+
+    cy.getBySel('login-nav-link').should('be.visible')
+    cy.getBySel('account-nav-link').should('not.exist')
+    cy.window().its('localStorage').invoke('getItem', 'acmecatalog.auth').should('be.null')
+  })
 })
