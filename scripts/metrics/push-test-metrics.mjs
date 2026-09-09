@@ -106,6 +106,13 @@ function rowsFromCypressResults(resultsDir) {
     const tagMap = extractTagMap(record.spec)
 
     for (const test of record.tests) {
+      // @cypress/grep doesn't remove non-matching tests from a spec file —
+      // it marks them Mocha-`pending` internally (e.g. an @regression test
+      // living in the same file as an @smoke one, when running e2e-smoke).
+      // They never actually ran; recording them as attempts would silently
+      // drag pass rate down for tests nothing executed, real bug this
+      // pipeline's own first live run surfaced.
+      if (test.state === 'pending') continue
       const total = test.attempts.length
       const failureCategory = test.state === 'failed' ? classifyFailure(test.displayError) : null
       const nameHash = shortHash(test.title)
