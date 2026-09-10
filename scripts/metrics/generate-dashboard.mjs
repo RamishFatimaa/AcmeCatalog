@@ -36,9 +36,15 @@ const LAYER_LABEL = {
 // wraps and starts *reusing* colors once the series count exceeds it — the
 // exact bug that made every job past the 5th look identical on the
 // per-job trend chart. 12 is comfortably above today's job/layer counts.
+//
+// Deliberately spread around the hue wheel (blue/orange/green/red/purple/
+// teal/...) rather than variations on the page's own green-and-brown theme
+// tokens — a first attempt reused the theme's earthy palette for *every*
+// series, which meant most of them were still shades of the same two
+// hues and unreadable in a legend of 6+.
 const CHART_PALETTE = [
-  '#2d5540', '#c17a4f', '#4a5a8a', '#8a5a3a', '#4d7c62', '#b08968',
-  '#a3425c', '#3a7a8a', '#6b4a8a', '#8a8a3a', '#5a8a4a', '#8a4a4a',
+  '#3b6fa0', '#d17d2f', '#3f8f5f', '#c1443c', '#7b5ea3', '#2f8f96',
+  '#b04a86', '#b8942e', '#5a6b8a', '#8a5a3a', '#7a2f3f', '#4a4a4a',
 ]
 function paletteColor(index) {
   return CHART_PALETTE[index % CHART_PALETTE.length]
@@ -64,12 +70,13 @@ const STAGE_LABEL = {
   3: 'Stage 3 — job-timing rollup',
   4: 'Stage 4 — dashboard publish',
 }
-const STAGE_COLOR = { 1: '#2d5540', 2: '#c17a4f', 3: '#4a5a8a', 4: '#a3425c' }
+const STAGE_COLOR = { 1: '#3f8f5f', 2: '#3b6fa0', 3: '#7b5ea3', 4: '#b04a86' }
 const NON_GATING_JOBS = new Set(['ai-prompt-demo'])
 
 // Seeded heuristic categories (see push-test-metrics.mjs's classifyFailure)
 // — shared here so the Overview failure-mix chart and the Failures page
-// badges render the same label/color for the same category.
+// badges render the same label/color for the same category. Distinct hues
+// (not shades of the same brown/orange), same reasoning as CHART_PALETTE.
 const FAILURE_CATEGORY_LABEL = {
   'infra-flake': 'Infra flake',
   'ui-timeout': 'UI timeout',
@@ -79,12 +86,12 @@ const FAILURE_CATEGORY_LABEL = {
   unclassified: 'Unclassified',
 }
 const FAILURE_CATEGORY_COLOR = {
-  'infra-flake': '#c17a4f',
-  'ui-timeout': '#b08968',
-  'assertion-failure': '#a3425c',
-  'http-error': '#8a4a4a',
-  'contract-mismatch': '#4a5a8a',
-  unclassified: '#8a5a3a',
+  'infra-flake': '#d17d2f',
+  'ui-timeout': '#b8942e',
+  'assertion-failure': '#c1443c',
+  'http-error': '#7a2f3f',
+  'contract-mismatch': '#7b5ea3',
+  unclassified: '#4a4a4a',
 }
 
 // Not a contractual SLA — reasonable defaults for a CRUD API on modest
@@ -206,7 +213,15 @@ function svgLineChart({ width = 720, height = 240, series, yLabel = '', yMax: yM
     const dashAttr = s.dashed ? ' stroke-dasharray="4,3"' : ''
     const dots = sorted.map((p) => {
       const note = p.n > 1 ? ` (median of ${p.n} runs)` : ''
-      return `<circle cx="${xPos(p.x).toFixed(1)}" cy="${yPos(p.y).toFixed(1)}" r="3" fill="${s.color}"><title>${escapeHtml(s.label)} — ${escapeHtml(p.x)}: ${p.y}${unitSuffix}${note}</title></circle>`
+      const cx = xPos(p.x).toFixed(1)
+      const cy = yPos(p.y).toFixed(1)
+      const tip = escapeHtml(`${s.label} — ${p.x}: ${p.y}${unitSuffix}${note}`)
+      // The visible 3px dot plus an invisible 9px hit circle on top — a
+      // 3px target is nearly impossible to land a real cursor on, which is
+      // why hovering "didn't show data" in practice even though a title
+      // technically existed.
+      return `<circle cx="${cx}" cy="${cy}" r="3" fill="${s.color}" />` +
+        `<circle cx="${cx}" cy="${cy}" r="9" fill="transparent" data-tip="${tip}" />`
     }).join('')
     return `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2"${dashAttr} />${dots}`
   }).join('')
@@ -247,7 +262,7 @@ function svgBarChart({ width = 640, bars, valueSuffix = '', barHeight = 22, gap 
     const w = Math.max(2, (innerW * b.value) / maxVal)
     return `
       <text x="${pad.left - 10}" y="${y + barHeight / 2 + 4}" text-anchor="end" class="chart-bar-label">${escapeHtml(b.label)}</text>
-      <rect x="${pad.left}" y="${y}" width="${w.toFixed(1)}" height="${barHeight}" fill="${b.color}" rx="3"><title>${escapeHtml(b.label)}: ${b.value.toFixed(1)}${valueSuffix}</title></rect>
+      <rect x="${pad.left}" y="${y}" width="${w.toFixed(1)}" height="${barHeight}" fill="${b.color}" rx="3" data-tip="${escapeHtml(`${b.label}: ${b.value.toFixed(1)}${valueSuffix}`)}" />
       <text x="${pad.left + w + 8}" y="${y + barHeight / 2 + 4}" class="chart-bar-value">${b.value.toFixed(1)}${valueSuffix}</text>`
   }).join('')
 
@@ -271,9 +286,8 @@ function svgHeatmap({ tests, days, cellSize = 16 }) {
       const cell = t.byDay.get(d)
       if (!cell) return ''
       const color = cell.attempts > 1 ? 'var(--accent)' : cell.outcome === 'passed' ? 'var(--primary)' : '#c1524f'
-      return `<rect x="${pad.left + di * cellSize}" y="${pad.top + ti * cellSize}" width="${cellSize - 2}" height="${cellSize - 2}" fill="${color}" rx="2">
-        <title>${escapeHtml(t.name)} — ${d} — ${cell.attempts} attempt(s), ${cell.outcome}</title>
-      </rect>`
+      const tip = escapeHtml(`${t.name} — ${d} — ${cell.attempts} attempt(s), ${cell.outcome}`)
+      return `<rect x="${pad.left + di * cellSize}" y="${pad.top + ti * cellSize}" width="${cellSize - 2}" height="${cellSize - 2}" fill="${color}" rx="2" data-tip="${tip}" />`
     }).join('')
     return label + cells
   }).join('')
@@ -311,23 +325,34 @@ function svgGantt({ width = 720, jobs, runStartMs }) {
     const stage = JOB_STAGE[j.partitionKey]
     const color = stage ? STAGE_COLOR[stage] : '#8a8a8a'
     const label = `${j.partitionKey}${j.MatrixIndex && j.MatrixIndex !== '0' ? ` (${j.MatrixIndex})` : ''}`
+    const tip = escapeHtml(`${label} — ${Math.round(endS - startS)}s (${Math.round(startS)}s to ${Math.round(endS)}s into the run)`)
     return `
       <text x="${pad.left - 10}" y="${y + rowH / 2 + 4}" text-anchor="end" class="chart-bar-label">${escapeHtml(label)}</text>
-      <rect x="${x1.toFixed(1)}" y="${y + 3}" width="${Math.max(2, x2 - x1).toFixed(1)}" height="${rowH - 8}" fill="${color}" rx="3">
-        <title>${escapeHtml(label)} — ${Math.round(endS - startS)}s (${Math.round(startS)}s to ${Math.round(endS)}s into the run)</title>
-      </rect>`
+      <rect x="${x1.toFixed(1)}" y="${y + 3}" width="${Math.max(2, x2 - x1).toFixed(1)}" height="${rowH - 8}" fill="${color}" rx="3" data-tip="${tip}" />`
   }).join('')
 
   const stagesPresent = [...new Set(sorted.map((j) => JOB_STAGE[j.partitionKey]).filter(Boolean))].sort()
   const legendItems = stagesPresent.map((s) => ({ label: STAGE_LABEL[s], color: STAGE_COLOR[s] }))
   if (sorted.some((j) => !JOB_STAGE[j.partitionKey])) legendItems.push({ label: 'Non-gating (e.g. AI demo)', color: '#8a8a8a' })
-  const legend = legendItems.map((item, i) => `
-    <g transform="translate(${pad.left + i * 210}, ${height - 2})">
+  // Wraps into multiple rows rather than a fixed x-spacing that ran the
+  // longest label ("Non-gating (e.g. AI demo)") straight off the right
+  // edge of the viewBox — confirmed by actually rendering this in a
+  // browser, not just reading the SVG source.
+  const itemWidth = 230
+  const itemsPerRow = Math.max(1, Math.floor(width / itemWidth))
+  const legendRows = Math.ceil(legendItems.length / itemsPerRow)
+  const legend = legendItems.map((item, i) => {
+    const col = i % itemsPerRow
+    const row = Math.floor(i / itemsPerRow)
+    return `
+    <g transform="translate(${col * itemWidth}, ${height - 2 + row * 16})">
       <rect width="9" height="9" y="-9" fill="${item.color}" rx="2" />
       <text x="13" y="0" class="chart-legend">${escapeHtml(item.label)}</text>
-    </g>`).join('')
+    </g>`
+  }).join('')
+  const legendHeight = 18 + (legendRows - 1) * 16
 
-  return `<svg viewBox="0 0 ${width} ${height + 16}" role="img" aria-label="Job timeline for the latest CI run, colored by pipeline stage" class="chart">
+  return `<svg viewBox="0 0 ${width} ${height + legendHeight}" role="img" aria-label="Job timeline for the latest CI run, colored by pipeline stage" class="chart">
     ${gridLines}${rows}
     <g transform="translate(0, 18)">${legend}</g>
   </svg>`
@@ -416,8 +441,16 @@ function shell(activeFile, title, body, generatedAt) {
   th { background: var(--surface-2); font-size: 0.7rem; text-transform: uppercase; color: var(--ink-muted); cursor: pointer; user-select: none; }
   tr:hover td { background: var(--surface-2); }
   .badge { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 4px; }
-  input[type=text] { padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); width: 100%; max-width: 320px; }
+  input[type=text], select { padding: 0.45rem 0.65rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--ink); }
+  input[type=text] { width: 100%; max-width: 320px; }
+  .table-filters { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
   footer { margin-top: 3rem; color: var(--ink-muted); font-size: 0.78rem; }
+  /* Real cursor-following tooltip, not the browser's native <title> delay —
+     a native title tooltip also only fires when the pointer sits exactly
+     over a handful of small SVG shapes (a 3px dot), which in practice
+     rarely happens; data-tip + this listener covers the same shapes plus
+     a larger invisible hit area around each one. */
+  .chart-tooltip { position: fixed; z-index: 1000; background: var(--ink); color: var(--bg); font-size: 0.75rem; padding: 0.35rem 0.6rem; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity 0.06s ease; white-space: nowrap; box-shadow: var(--shadow); }
 </style>
 </head>
 <body>
@@ -427,12 +460,75 @@ function shell(activeFile, title, body, generatedAt) {
   ${body}
   <footer>Generated ${escapeHtml(generatedAt)} · AcmeCatalog CI · <a href="https://github.com/RamishFatimaa/AcmeCatalog">source</a></footer>
 </div>
+<div class="chart-tooltip" id="chart-tooltip"></div>
+<script>
+(function () {
+  var tip = document.getElementById('chart-tooltip')
+  document.addEventListener('mousemove', function (e) {
+    var el = e.target.closest ? e.target.closest('[data-tip]') : null
+    if (!el) { tip.style.opacity = '0'; return }
+    tip.textContent = el.getAttribute('data-tip')
+    var pad = 14
+    var x = e.clientX + pad
+    var y = e.clientY + pad
+    if (x + 260 > window.innerWidth) x = e.clientX - pad - 260
+    tip.style.left = x + 'px'
+    tip.style.top = y + 'px'
+    tip.style.opacity = '1'
+  })
+  document.addEventListener('mouseleave', function () { tip.style.opacity = '0' })
+
+  // Generic table filter: any input/select with data-filter-for="<table id>"
+  // narrows that table's rows. Multiple controls for the same table combine
+  // with AND. A <select> matches its data-filter-col cell exactly; a text
+  // input matches anywhere in the row (case-insensitive substring).
+  document.querySelectorAll('[data-filter-for]').forEach(function (control) {
+    var tableId = control.getAttribute('data-filter-for')
+    var table = document.getElementById(tableId)
+    if (!table) return
+    var apply = function () {
+      var controls = document.querySelectorAll('[data-filter-for="' + tableId + '"]')
+      var rows = table.querySelectorAll('tbody tr')
+      rows.forEach(function (tr) {
+        var visible = true
+        controls.forEach(function (c) {
+          var val = c.value.trim().toLowerCase()
+          if (!val) return
+          if (c.tagName === 'SELECT') {
+            var col = Number(c.getAttribute('data-filter-col'))
+            var cellText = (tr.children[col] ? tr.children[col].textContent : '').toLowerCase()
+            if (cellText !== val) visible = false
+          } else if (!tr.textContent.toLowerCase().includes(val)) {
+            visible = false
+          }
+        })
+        tr.style.display = visible ? '' : 'none'
+      })
+    }
+    control.addEventListener('input', apply)
+    control.addEventListener('change', apply)
+  })
+})()
+</script>
 </body>
 </html>`
 }
 
 function kpi(value, label) {
   return `<div class="kpi"><div class="value">${escapeHtml(value)}</div><div class="label">${escapeHtml(label)}</div></div>`
+}
+
+// A <select> that filters `tableId` by exact match against its Layer
+// column (index `col`), wired up by shell()'s generic data-filter-for
+// script. Options come from the layer keys actually present in the data,
+// not the full LAYERS list — no point offering a filter value with zero
+// possible matches.
+function layerFilterSelect(tableId, layerKeysPresent, col = 1) {
+  const distinctLayers = [...new Set(layerKeysPresent)].sort()
+  const options = distinctLayers
+    .map((l) => `<option value="${escapeHtml(LAYER_LABEL[l] ?? l)}">${escapeHtml(LAYER_LABEL[l] ?? l)}</option>`)
+    .join('')
+  return `<select data-filter-for="${tableId}" data-filter-col="${col}"><option value="">All layers</option>${options}</select>`
 }
 
 // ---------------------------------------------------------------------------
@@ -567,11 +663,15 @@ function buildFlakinessPage(testRuns, generatedAt) {
     <h2>Attempt heatmap</h2>
     <div class="card">${svgHeatmap({ tests: heatmapTests, days: allDays })}</div>
     <h2>All flaky tests</h2>
+    <div class="table-filters">
+      <input type="text" placeholder="Filter by test name..." data-filter-for="flaky-table" />
+      ${layerFilterSelect('flaky-table', flaky.map((t) => t.layer))}
+    </div>
     <div class="card">
-      <table>
+      <table id="flaky-table">
         <thead><tr><th>Test</th><th>Layer</th><th>Flaky runs</th><th>Total runs</th><th>Flake rate</th></tr></thead>
         <tbody>
-          ${flaky.map((t) => `<tr><td>${escapeHtml(t.name)}</td><td>${LAYER_LABEL[t.layer] ?? t.layer}</td><td>${t.flakyRuns}</td><td>${t.totalRuns}</td><td>${t.flakeRate.toFixed(1)}%</td></tr>`).join('') || '<tr><td colspan="5">No flaky tests recorded yet — good sign, or not enough runs yet.</td></tr>'}
+          ${flaky.map((t) => `<tr><td>${escapeHtml(t.name)}</td><td>${escapeHtml(LAYER_LABEL[t.layer] ?? t.layer)}</td><td>${t.flakyRuns}</td><td>${t.totalRuns}</td><td>${t.flakeRate.toFixed(1)}%</td></tr>`).join('') || '<tr><td colspan="5">No flaky tests recorded yet — good sign, or not enough runs yet.</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -707,9 +807,9 @@ function buildSlaPage(testRuns, generatedAt) {
   // hex value — `var(--x)22` is invalid CSS and silently drops the
   // background, exactly what happened here before this fix.
   const STATUS_BADGE = {
-    met: ['Met', '#2d5540'],
-    warn: ['Near limit', '#b08968'],
-    breach: ['Breach', '#a3425c'],
+    met: ['Met', '#3f8f5f'],
+    warn: ['Near limit', '#b8942e'],
+    breach: ['Breach', '#c1443c'],
   }
   const statusBadge = (status) => {
     const [label, color] = STATUS_BADGE[status]
@@ -783,21 +883,29 @@ function buildHygienePage(testRuns, generatedAt) {
     </div>
     <h2>Untagged tests</h2>
     <p class="subtitle">No @smoke/@regression tag — not selectable by either tag-filtered CI job. API-contract specs are excluded; they don't use this tagging scheme.</p>
+    <div class="table-filters">
+      <input type="text" placeholder="Filter by test name..." data-filter-for="untagged-table" />
+      ${layerFilterSelect('untagged-table', untaggedTests.map((t) => t.layer))}
+    </div>
     <div class="card">
-      <table>
+      <table id="untagged-table">
         <thead><tr><th>Test</th><th>Layer</th></tr></thead>
         <tbody>
-          ${untaggedTests.map((t) => `<tr><td>${escapeHtml(t.name)}</td><td>${LAYER_LABEL[t.layer] ?? t.layer}</td></tr>`).join('') || '<tr><td colspan="2">None — every tagged layer is fully tagged.</td></tr>'}
+          ${untaggedTests.map((t) => `<tr><td>${escapeHtml(t.name)}</td><td>${escapeHtml(LAYER_LABEL[t.layer] ?? t.layer)}</td></tr>`).join('') || '<tr><td colspan="2">None — every tagged layer is fully tagged.</td></tr>'}
         </tbody>
       </table>
     </div>
     <h2>Stale tests</h2>
     <p class="subtitle">Recorded within the ${LOOKBACK_DAYS}-day window but not run in the last 14 days — worth checking whether it's dead code, a disabled job, or fell out of every CI tag filter.</p>
+    <div class="table-filters">
+      <input type="text" placeholder="Filter by test name..." data-filter-for="stale-table" />
+      ${layerFilterSelect('stale-table', staleTests.map((t) => t.layer))}
+    </div>
     <div class="card">
-      <table>
+      <table id="stale-table">
         <thead><tr><th>Test</th><th>Layer</th><th>Last seen</th></tr></thead>
         <tbody>
-          ${staleTests.map((t) => `<tr><td>${escapeHtml(t.name)}</td><td>${LAYER_LABEL[t.layer] ?? t.layer}</td><td>${escapeHtml(t.lastSeen.slice(0, 10))}</td></tr>`).join('') || '<tr><td colspan="3">None — every test has run within the last 14 days.</td></tr>'}
+          ${staleTests.map((t) => `<tr><td>${escapeHtml(t.name)}</td><td>${escapeHtml(LAYER_LABEL[t.layer] ?? t.layer)}</td><td>${escapeHtml(t.lastSeen.slice(0, 10))}</td></tr>`).join('') || '<tr><td colspan="3">None — every test has run within the last 14 days.</td></tr>'}
         </tbody>
       </table>
     </div>
@@ -819,9 +927,9 @@ function buildFailuresPage(testRuns, generatedAt) {
     .slice(0, 300)
 
   const rowsHtml = failures.map((r) => `
-    <tr data-test="${escapeHtml(r.TestName.toLowerCase())}" data-category="${escapeHtml(r.FailureCategory ?? '')}">
+    <tr>
       <td>${escapeHtml(r.TestName)}</td>
-      <td>${LAYER_LABEL[r.partitionKey] ?? r.partitionKey}</td>
+      <td>${escapeHtml(LAYER_LABEL[r.partitionKey] ?? r.partitionKey)}</td>
       <td>${failureBadge(r.FailureCategory)}</td>
       <td>${escapeHtml((r.FailureMessage ?? '').slice(0, 120))}</td>
       <td>${escapeHtml(r.CommitSha?.slice(0, 7) ?? '')}</td>
@@ -829,22 +937,25 @@ function buildFailuresPage(testRuns, generatedAt) {
       <td>${escapeHtml(r.RecordedAt?.slice(0, 16) ?? '')}</td>
     </tr>`).join('')
 
+  const categoriesPresent = [...new Set(failures.map((r) => r.FailureCategory ?? 'unclassified'))].sort()
+  const categoryOptions = categoriesPresent
+    .map((c) => `<option value="${escapeHtml(FAILURE_CATEGORY_LABEL[c] ?? c)}">${escapeHtml(FAILURE_CATEGORY_LABEL[c] ?? c)}</option>`)
+    .join('')
+
   const body = `
     <p class="subtitle">Most recent ${failures.length} failures across the ${LOOKBACK_DAYS}-day window.</p>
-    <input type="text" id="filter-input" placeholder="Filter by test name..." />
-    <div class="card" style="margin-top:1rem">
+    <div class="table-filters">
+      <input type="text" placeholder="Filter by test name..." data-filter-for="failures-table" />
+      ${layerFilterSelect('failures-table', failures.map((r) => r.partitionKey))}
+      <select data-filter-for="failures-table" data-filter-col="2"><option value="">All categories</option>${categoryOptions}</select>
+    </div>
+    <div class="card">
       <table id="failures-table">
         <thead><tr><th>Test</th><th>Layer</th><th>Category</th><th>Message</th><th>Commit</th><th>Actor</th><th>When</th></tr></thead>
         <tbody>${rowsHtml || '<tr><td colspan="7">No failures recorded in this window.</td></tr>'}</tbody>
       </table>
     </div>
     <script>
-      document.getElementById('filter-input').addEventListener('input', (e) => {
-        const q = e.target.value.toLowerCase()
-        document.querySelectorAll('#failures-table tbody tr').forEach((tr) => {
-          tr.style.display = (tr.dataset.test ?? '').includes(q) ? '' : 'none'
-        })
-      })
       document.querySelectorAll('#failures-table th').forEach((th, colIndex) => {
         th.addEventListener('click', () => {
           const tbody = document.querySelector('#failures-table tbody')
