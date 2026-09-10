@@ -52,9 +52,18 @@ function rowsFromJobs(jobs) {
   const rows = []
 
   for (const job of jobs) {
-    // ci.yml's matrix jobs render as "e2e-smoke (1)" / "e2e-smoke (2)" —
-    // split that back into a stable JobName partition plus the matrix index.
-    const match = /^(.*?)(?:\s*\((\d+)\))?$/.exec(job.name)
+    // ci.yml's matrix jobs render as "e2e-regression (1)" (a single numeric
+    // dimension) but also "e2e-smoke (electron, 1)" (multiple dimensions,
+    // joined "browser, containers") — a digit-only capture here matched the
+    // first shape but not the second, so every e2e-smoke matrix shard fell
+    // through as its own distinct jobName ("e2e-smoke (electron, 1)",
+    // "e2e-smoke (electron, 2)", "e2e-smoke (firefox, 1)" as three separate
+    // partitions) instead of grouping under one "e2e-smoke" partition with a
+    // matrix index — confirmed directly against real CiJobRuns rows, and
+    // exactly why the dashboard's per-job trend chart fragmented into
+    // near-duplicate series for e2e-smoke instead of one line. Capturing any
+    // trailing parenthetical (not just digits) fixes both shapes.
+    const match = /^(.*?)(?:\s*\((.+)\))?$/.exec(job.name)
     const jobName = match[1].trim()
     const matrixIndex = match[2] ?? '0'
 

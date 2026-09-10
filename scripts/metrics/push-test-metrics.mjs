@@ -42,12 +42,21 @@ function truncate(message, max = 500) {
 }
 
 // Seeded heuristic, not a solved classifier — see the test-strategy doc.
-// Anything not matched stays "unclassified" for manual/dashboard-side triage.
+// Order matters: most specific/actionable category wins. Anything not
+// matched stays "unclassified" for manual/dashboard-side triage. Patterns
+// are real, documented message shapes from the tools this repo actually
+// uses (Cypress+Chai's AssertionError text, NUnit's Assert.That
+// Expected/But was block, Pact's verifier mismatch report, standard HTTP
+// error wording) — not invented categories with no message to match.
 function classifyFailure(message) {
   if (!message) return null
   if (/ECONNREFUSED|ECONNRESET|EAI_AGAIN|getaddrinfo|ERR_CONNECTION/i.test(message)) return 'infra-flake'
   if (/failed to start/i.test(message)) return 'infra-flake'
-  if (/Timed out retrying.*cy\.(wait|visit|get|intercept)/is.test(message)) return 'infra-flake'
+  if (/Timed out retrying.*cy\.(wait|visit|intercept)/is.test(message)) return 'infra-flake'
+  if (/Verification Mismatches|actual interactions do not match|expected header|expected a request/i.test(message)) return 'contract-mismatch'
+  if (/Request failed with status code [45]\d\d|\b[45]\d\d\b.*(Internal Server Error|Bad Request|Not Found|Unauthorized|Forbidden)/i.test(message)) return 'http-error'
+  if (/Timed out retrying.*cy\.(get|find|contains|should)/is.test(message)) return 'ui-timeout'
+  if (/AssertionError|expected .* to (equal|deep equal|include|match|be)|Expected:[\s\S]*But was:/i.test(message)) return 'assertion-failure'
   return 'unclassified'
 }
 
