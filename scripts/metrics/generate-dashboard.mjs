@@ -15,13 +15,14 @@ const OUT_DIR = process.env.DASHBOARD_OUT_DIR ?? 'dist'
 const LOOKBACK_DAYS = 90
 
 const GATING_JOBS = new Set(['backend-tests', 'component-tests', 'e2e-smoke', 'e2e-regression'])
-const LAYERS = ['backend-unit', 'backend-integration', 'component', 'e2e-ui', 'e2e-api']
+const LAYERS = ['backend-unit', 'backend-integration', 'component', 'e2e-ui', 'e2e-api', 'contract-pact']
 const LAYER_LABEL = {
   'backend-unit': 'Backend unit',
   'backend-integration': 'Backend integration',
   component: 'Component',
   'e2e-ui': 'E2E UI',
   'e2e-api': 'E2E API',
+  'contract-pact': 'Contract (Pact)',
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +313,16 @@ function buildOverviewPage(testRuns, jobRuns, generatedAt) {
   const finals = testRuns.filter((r) => r.IsFinalAttempt)
   const passRate = pct(finals.filter((r) => r.FinalOutcome === 'passed').length, finals.length)
 
+  // Contract (Pact) rows are a subset of `finals` (same TestRuns table,
+  // partitionKey 'contract-pact') — both consumer specs
+  // (IdentityClientPactTests, the frontend's auth.consumer.pact.test.ts)
+  // and the provider verifier (IdentityServiceProviderVerificationTests).
+  // Surfaced as its own KPI since it answers a different question than the
+  // overall pass rate: "are the published contracts currently satisfied,"
+  // not "is the suite green."
+  const pactFinals = finals.filter((r) => r.partitionKey === 'contract-pact')
+  const pactPassRate = pct(pactFinals.filter((r) => r.FinalOutcome === 'passed').length, pactFinals.length)
+
   const gatingFlakes = testRuns.filter((r) => r.AttemptIndex > 1 && GATING_JOBS.has(r.JobName)).length
 
   const failed = finals.filter((r) => r.FinalOutcome === 'failed')
@@ -334,7 +345,7 @@ function buildOverviewPage(testRuns, jobRuns, generatedAt) {
     bucket.total += 1
     if (r.FinalOutcome === 'passed') bucket.pass += 1
   }
-  const colors = { 'backend-unit': '#2d5540', 'backend-integration': '#4d7c62', component: '#c17a4f', 'e2e-ui': '#8a5a3a', 'e2e-api': '#b08968' }
+  const colors = { 'backend-unit': '#2d5540', 'backend-integration': '#4d7c62', component: '#c17a4f', 'e2e-ui': '#8a5a3a', 'e2e-api': '#b08968', 'contract-pact': '#4a5a8a' }
   const series = LAYERS.map((layer) => ({
     label: LAYER_LABEL[layer],
     color: colors[layer],
@@ -359,6 +370,7 @@ function buildOverviewPage(testRuns, jobRuns, generatedAt) {
       ${kpi(medianCriticalPath === null ? '—' : `${medianCriticalPath}s`, 'Median critical path')}
       ${kpi(failed.length ? `${infra} infra : ${other} real` : '—', 'Failures: infra vs. real')}
       ${kpi(finals.length, 'Test-attempts recorded')}
+      ${kpi(pactPassRate === null ? '—' : `${pactPassRate.toFixed(1)}%`, 'Contract (Pact) pass rate')}
     </div>
     <h2>Pass rate over time, by layer</h2>
     <div class="card">${svgLineChart({ series, yLabel: 'Pass rate %', yMax: 100 })}</div>
