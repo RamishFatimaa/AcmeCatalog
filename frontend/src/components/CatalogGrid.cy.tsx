@@ -1,6 +1,7 @@
 import { MemoryRouter } from 'react-router-dom'
 import { CatalogGrid } from './CatalogGrid'
 import { AuthProvider } from '../auth/AuthContext'
+import { API_ROUTES } from '../../cypress/support/routes'
 import type { Item } from '../types'
 
 // CatalogGrid is the largest, most stateful component in the app (search
@@ -60,11 +61,12 @@ function mountGrid(auth?: { token: string; username: string }) {
 }
 
 function stubItems(items: Item[]) {
-  // Registered first so the more specific /categories intercept below
-  // (registered second, so it wins for matching requests) takes precedence
-  // for category requests while everything else falls through to this one.
-  cy.intercept('GET', '**/api/items*', { body: items }).as('itemsRequest')
-  cy.intercept('GET', '**/api/items/categories', { body: categories }).as('categoriesRequest')
+  // API_ROUTES.itemsList's `path` is an exact '/api/items', not a '*'-glob
+  // prefix — unlike the old hand-typed '**/api/items*', it structurally
+  // cannot also match '/api/items/categories', so unlike before, these two
+  // no longer depend on registration order to avoid colliding.
+  cy.intercept(API_ROUTES.itemsList, { body: items }).as('itemsRequest')
+  cy.intercept(API_ROUTES.itemCategories, { body: categories }).as('categoriesRequest')
 }
 
 describe('<CatalogGrid /> (anonymous)', () => {
@@ -141,13 +143,28 @@ describe('<CatalogGrid /> (anonymous)', () => {
   })
 
   it('shows a graceful error when the catalog fails to load', () => {
-    cy.intercept('GET', '**/api/items*', { forceNetworkError: true }).as('itemsFailure')
-    cy.intercept('GET', '**/api/items/categories', { body: categories })
+    cy.intercept(API_ROUTES.itemsList, { forceNetworkError: true }).as('itemsFailure')
+    cy.intercept(API_ROUTES.itemCategories, { body: categories })
     mountGrid()
 
     cy.wait('@itemsFailure')
     cy.get('[data-testid=catalog-error]').should('be.visible')
     cy.get('[data-testid=item-card]').should('not.exist')
+  })
+
+  it('shows a small inline error when categories fail to load, without blocking the rest of the grid', () => {
+    // Mirrors the items-failure test above exactly, but for the
+    // independent categories fetch — proves CatalogGrid.tsx's new
+    // categoriesError state/UI, and that a categories failure doesn't
+    // also take down the (successfully-loaded) items grid alongside it.
+    cy.intercept(API_ROUTES.itemsList, { body: sixItems }).as('itemsRequest')
+    cy.intercept(API_ROUTES.itemCategories, { forceNetworkError: true }).as('categoriesFailure')
+    mountGrid()
+
+    cy.wait('@itemsRequest')
+    cy.wait('@categoriesFailure')
+    cy.get('[data-testid=categories-error]').should('be.visible')
+    cy.get('[data-testid=item-card]').should('have.length.greaterThan', 0)
   })
 
   it('Load More reveals the next page from the already-fetched list', () => {
@@ -169,8 +186,16 @@ describe('<CatalogGrid /> (authenticated)', () => {
 
   it('selecting items shows the bulk bar; Delete Selected removes exactly the checked items', () => {
     cy.window().then((win) => cy.stub(win, 'confirm').returns(true)).as('confirm')
-    cy.intercept('DELETE', '**/api/items/1', {}).as('delete1')
-    cy.intercept('DELETE', '**/api/items/2', {}).as('delete2')
+    // Overrides API_ROUTES.itemDelete's generic any-id regex with each
+    // specific id this test needs to wait on individually — still
+    // service-scoped (hostname/port) from the registry, just more precise
+    // than the shared entry for this one test's purposes. `url` has to be
+    // destructured out entirely, not set to undefined — cy.intercept()
+    // rejects a RouteMatcher whose `url` key is present but not a
+    // string/RegExp, even if the value is undefined.
+    const { url: _itemDeleteUrl, ...itemDeleteBase } = API_ROUTES.itemDelete
+    cy.intercept({ ...itemDeleteBase, path: '/api/items/1' }, {}).as('delete1')
+    cy.intercept({ ...itemDeleteBase, path: '/api/items/2' }, {}).as('delete2')
     mountGrid({ token: 'fake-token', username: 'testuser' })
     cy.wait('@itemsRequest')
 
@@ -189,8 +214,58 @@ describe('<CatalogGrid /> (authenticated)', () => {
     cy.get('[data-testid=bulk-actions-bar]').should('not.exist')
   })
 
+  it('reloads from the server on a partial bulk-delete failure, instead of showing stale data', () => {
+    // Real bug this proves the fix for: Promise.all rejects on the FIRST
+    // failure, but any delete that already succeeded really did happen
+    // server-side. The old catch only showed a toast — no loadItems() —
+    // so the grid kept showing both items as if neither delete had
+    // happened, even though item 1's really was gone. Item 1's delete
+    // succeeds, item 2's is forced to fail; the reload this fix adds
+    // should show item 1 actually gone and item 2 still there.
+    cy.window().then((win) => cy.stub(win, 'confirm').returns(true))
+    const { url: _itemDeleteUrl, ...itemDeleteBase } = API_ROUTES.itemDelete
+    cy.intercept({ ...itemDeleteBase, path: '/api/items/1' }, {}).as('delete1')
+    cy.intercept({ ...itemDeleteBase, path: '/api/items/2' }, { forceNetworkError: true }).as('delete2Failure')
+    mountGrid({ token: 'fake-token', username: 'testuser' })
+    cy.wait('@itemsRequest')
+
+    cy.get('[data-testid=select-item-checkbox]').eq(0).click()
+    cy.get('[data-testid=select-item-checkbox]').eq(1).click()
+
+    // The reload the fix triggers — real post-partial-failure state:
+    // item 1 (deleted) gone, item 2 (failed) still present.
+    stubItems(sixItems.slice(1))
+    cy.get('[data-testid=delete-selected-btn]').click()
+
+    cy.wait('@delete1')
+    cy.wait('@delete2Failure')
+    cy.get('[data-testid=toast-notification]').should('contain.text', 'Could not delete the selected items')
+    // Grid pages at PAGE_SIZE (4) — assert the specific items the reload
+    // proves, not a raw count that pagination would cap anyway.
+    cy.wait('@itemsRequest')
+    cy.contains('[data-testid=item-name]', 'Alpha Widget').should('not.exist')
+    cy.contains('[data-testid=item-name]', 'Bravo Gadget').should('exist')
+  })
+
+  it('clears the current selection when the search/filter changes', () => {
+    // Real bug: selecting an item, then narrowing the list with a search
+    // term that hides it, left the bulk bar showing "1 selected" for an
+    // item no longer on screen — and Delete Selected would still have sent
+    // a delete for that hidden id.
+    mountGrid({ token: 'fake-token', username: 'testuser' })
+    cy.wait('@itemsRequest')
+
+    cy.get('[data-testid=select-item-checkbox]').eq(0).click()
+    cy.get('[data-testid=bulk-actions-bar]').should('be.visible')
+
+    cy.get('[data-testid=search-input]').type('Alpha')
+    cy.wait('@itemsRequest')
+
+    cy.get('[data-testid=bulk-actions-bar]').should('not.exist')
+  })
+
   it('reorders items via drag; the PUT body matches the new order', () => {
-    cy.intercept('PUT', '**/api/items/reorder', {}).as('reorder')
+    cy.intercept(API_ROUTES.itemsReorder, {}).as('reorder')
     mountGrid({ token: 'fake-token', username: 'testuser' })
     cy.wait('@itemsRequest')
 
@@ -202,5 +277,33 @@ describe('<CatalogGrid /> (authenticated)', () => {
       expect(orderedIds.slice(0, 2)).to.deep.eq([2, 1])
     })
     cy.get('[data-testid=toast-notification]').should('contain.text', 'Catalog order updated')
+  })
+
+  it('reverts the drag to its original order when the reorder request fails', () => {
+    // A state-management bug, not a missing-UI one — easy to write a test
+    // that LOOKS like it exercises the rollback without actually doing
+    // so. This was run against the pre-fix handleDragEnd first (no
+    // preDragOrderRef/setItems(preDragOrder) in the catch) and confirmed
+    // red — the visual order stayed on [Bravo, Alpha, ...] after the
+    // stubbed failure — before being confirmed green here.
+    cy.intercept(API_ROUTES.itemsReorder, { forceNetworkError: true }).as('reorderFailure')
+    mountGrid({ token: 'fake-token', username: 'testuser' })
+    cy.wait('@itemsRequest')
+
+    cy.get('[data-testid=item-card]').eq(0).invoke('attr', 'data-item-id').then((firstId) => {
+      cy.get('[data-testid=item-card]').eq(1).as('draggedCard').trigger('dragstart')
+      cy.get('[data-testid=item-card]').eq(0).trigger('dragover')
+
+      // Mid-drag, before dragend/the failed request: the optimistic
+      // swap already applied, order is NOT what it started as.
+      cy.get('[data-testid=item-card]').eq(0).should('not.have.attr', 'data-item-id', firstId as string)
+
+      cy.get('@draggedCard').trigger('dragend')
+      cy.wait('@reorderFailure')
+      cy.get('[data-testid=toast-notification]').should('contain.text', 'Could not save the new order')
+
+      // Reverted back to the id that was first before any of this began.
+      cy.get('[data-testid=item-card]').eq(0).should('have.attr', 'data-item-id', firstId as string)
+    })
   })
 })

@@ -12,13 +12,19 @@ export function ItemFormPage() {
   const navigate = useNavigate()
   const [initial, setInitial] = useState<Item | undefined>(undefined)
   const [loading, setLoading] = useState(isEdit)
+  const [loadError, setLoadError] = useState(false)
 
   useEffect(() => {
     if (!isEdit || !id) return
-    getItem(Number(id)).then((item) => {
-      setInitial(item)
-      setLoading(false)
-    })
+    getItem(Number(id))
+      .then((item) => {
+        setInitial(item)
+        setLoading(false)
+      })
+      .catch(() => {
+        setLoadError(true)
+        setLoading(false)
+      })
   }, [isEdit, id])
 
   async function handleSubmit(input: ItemInput, imageFile?: File | null) {
@@ -35,6 +41,17 @@ export function ItemFormPage() {
   }
 
   if (loading) return null
+
+  if (loadError) {
+    return (
+      <div className="alert alert-danger" data-testid="item-form-load-error">
+        Could not load this item to edit.{' '}
+        <button type="button" className="btn btn-link p-0 align-baseline" onClick={() => navigate('/Items')}>
+          Back to catalog
+        </button>
+      </div>
+    )
+  }
 
   return (
     <ItemForm initial={initial} onSubmit={handleSubmit} onCancel={() => navigate('/Items')} />

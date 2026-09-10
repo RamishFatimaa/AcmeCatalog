@@ -35,6 +35,25 @@ describe('Catalog browsing (anonymous)', () => {
     })
   })
 
+  it('sends a real GET with the term and category as actual query params, not just a body the UI happens to render correctly', { tags: '@regression' }, () => {
+    // Every other filter test here only asserts the rendered result —
+    // proof the UI reacted correctly to whatever the (real, unstubbed)
+    // backend sent back. Nothing asserts the outgoing request itself.
+    // The alias from beforeEach is a plain spy (no stubbed body), so the
+    // real backend still answers normally — this only adds a check on
+    // what was actually sent.
+    cy.getBySel('search-input').type('Headphones')
+    cy.wait('@itemsRequest')
+    cy.getBySel('category-filter').select('Electronics')
+
+    cy.wait('@itemsRequest').then((interception) => {
+      expect(interception.request.method).to.eq('GET')
+      const url = new URL(interception.request.url)
+      expect(url.searchParams.get('term')).to.eq('Headphones')
+      expect(url.searchParams.get('category')).to.eq('Electronics')
+    })
+  })
+
   it('shows a no-results state for a search with no matches', { tags: '@regression' }, () => {
     cy.getBySel('search-input').type('no-such-item-zzz')
     cy.wait('@itemsRequest')
@@ -121,6 +140,24 @@ describe('Catalog browsing (anonymous)', () => {
       cy.getBySel('quick-view-modal').should('be.visible')
       cy.getBySel('quick-view-name').should('contain.text', name)
       cy.getBySel('quick-view-image-frame').should('be.visible')
+      // This iframe's src is catalog-service's own origin
+      // (CATALOG_SERVICE_URL, :5302), genuinely cross-origin from the
+      // frontend (:5173) — the one place this app actually crosses
+      // origins. Researched and confirmed, not assumed: Cypress's own docs
+      // (docs.cypress.io/api/commands/origin, "Other limitations") state
+      // cy.origin() "cannot run commands inside an <iframe> element" at
+      // all, same- or cross-origin; separately, the iframe FAQ states
+      // cross-origin iframes are simply "not supported" because
+      // contentDocument on a different-origin iframe returns null per the
+      // browser's real same-origin policy — verified directly against this
+      // exact iframe (not just trusted from the docs): reading
+      // .contentDocument here returns null. The one documented workaround,
+      // `chromeWebSecurity: false`, is deliberately not enabled globally —
+      // it would weaken every other test's real CORS enforcement for the
+      // sake of this one assertion, and explicitly does not apply to
+      // Firefox (now also part of e2e-smoke), which would make this
+      // specific test browser-dependent for no good reason. `.should('be.visible')`
+      // above is the real, correct ceiling for what's verifiable here.
     })
   })
 
@@ -144,5 +181,28 @@ describe('Catalog browsing (anonymous)', () => {
     // so it needs an event that actually reaches it that way.
     cy.press(Cypress.Keyboard.Keys.ESC)
     cy.getBySel('quick-view-modal').should('not.be.visible')
+  })
+})
+
+describe('Catalog browsing — mobile viewport', () => {
+  // ItemCard.tsx's grid-mode column class is `col-sm-6 col-lg-3` — real,
+  // deliberate Bootstrap breakpoints, never exercised by any test until
+  // now (every other spec in this suite runs at Cypress's default desktop
+  // viewport). Verified this assertion is actually viewport-dependent
+  // before committing to it, not just re-asserting desktop behavior at a
+  // different number: at 1280x800 the first two cards' bounding rects
+  // share the same `top` (side by side); only at this mobile width do
+  // they differ (stacked) — confirmed by comparing both widths directly.
+  it('stacks item cards one per row below the sm breakpoint, unlike desktop', { tags: '@regression' }, () => {
+    cy.viewport(375, 812)
+    cy.resetDb()
+    cy.visit('/Items')
+
+    cy.getBySel('item-card').should('have.length.greaterThan', 1)
+    cy.getBySel('item-card').then(($cards) => {
+      const firstTop = $cards[0].getBoundingClientRect().top
+      const secondTop = $cards[1].getBoundingClientRect().top
+      expect(secondTop, 'second card should render below the first, not beside it, at mobile width').to.be.greaterThan(firstTop)
+    })
   })
 })

@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "es2021",
+    "lib": ["es2021"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["vitest/globals", "node"],
+    "skipLibCheck": true,
+    "strict": true
+  },
+  "include": ["**/*.ts", "../vitest.config.ts"]
+}

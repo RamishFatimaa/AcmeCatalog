@@ -15,6 +15,7 @@ export function ItemDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [item, setItem] = useState<Item | null>(null)
+  const [error, setError] = useState(false)
   const [tab, setTab] = useState<Tab>('description')
   // Client-only, localStorage-backed — this widget exists to give a real
   // Shadow DOM element something to do, not to be a full rating system with
@@ -23,12 +24,25 @@ export function ItemDetailPage() {
 
   useEffect(() => {
     if (!id) return
-    getItem(Number(id)).then(setItem)
+    getItem(Number(id))
+      .then(setItem)
+      .catch(() => setError(true))
   }, [id])
 
   function handleRatingChange(value: number) {
     setRating(value)
     if (id) localStorage.setItem(ratingKey(id), String(value))
+  }
+
+  if (error) {
+    return (
+      <div className="alert alert-danger" data-testid="item-detail-error">
+        Could not load this item.{' '}
+        <button type="button" className="btn btn-link p-0 align-baseline" onClick={() => navigate('/Items')}>
+          Back to catalog
+        </button>
+      </div>
+    )
   }
 
   if (!item) return null

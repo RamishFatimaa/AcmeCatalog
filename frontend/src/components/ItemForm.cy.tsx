@@ -116,6 +116,36 @@ describe('<ItemForm /> — create mode', () => {
     cy.get('@onCancel').should('have.been.calledOnce')
     cy.get('@onSubmit').should('not.have.been.called')
   })
+
+  it('shows a generic error and stays usable when onSubmit rejects with a non-validation error', () => {
+    // The real bug this proves the fix for: ItemForm's catch only ever
+    // handled ApiError's validation shape (err.problem?.errors) — a plain
+    // network failure or 500 (ItemFormPage's real createItem/updateItem/
+    // uploadItemImage all throw exactly this shape) was rethrown with no
+    // catch anywhere above it, an unhandled promise rejection instead of
+    // a shown message. onSubmit is a prop here (no network call inside
+    // ItemForm itself, see routes.ts's header comment on why this proof
+    // lives at the component layer, not behind a cy.intercept()), so a
+    // plain rejecting stub reproduces the exact shape ItemFormPage's real
+    // wiring would throw.
+    const onSubmit = cy.stub().rejects(new Error('network error')).as('onSubmit')
+    cy.mount(<ItemForm onSubmit={onSubmit} onCancel={cy.stub()} />)
+
+    cy.get('[data-testid=name-input]').type('Something')
+    cy.get('[data-testid=price-input]').type('10')
+    cy.get('[data-testid=category-input]').select('Electronics')
+    cy.get('[data-testid=description-input]').type('A description.')
+    cy.get('[data-testid=submit-btn]').click()
+
+    cy.get('[data-testid=item-form-error-summary]').should(
+      'contain.text',
+      'Something went wrong saving this item.',
+    )
+    // Not left disabled forever, and the entered values weren't wiped —
+    // the form is still genuinely usable for a retry.
+    cy.get('[data-testid=submit-btn]').should('not.be.disabled')
+    cy.get('[data-testid=name-input]').should('have.value', 'Something')
+  })
 })
 
 describe('<ItemForm /> — edit mode', () => {

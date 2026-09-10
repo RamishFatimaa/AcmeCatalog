@@ -1,4 +1,6 @@
 import type { LoginResponse } from '../../src/types'
+import { API_ROUTES, type RouteName } from './routes'
+import type { RouteHandler } from 'cypress/types/net-stubbing'
 
 // API-level helpers — auth-api.cy.ts/items-api.cy.ts are API-only (no UI),
 // and every authenticated E2E spec uses these to set up state instead of
@@ -72,6 +74,53 @@ Cypress.Commands.add('loginSession', (username = 'testuser', password = 'Test123
       cy.visit('/', {
         onBeforeLoad: (win) => win.localStorage.setItem('acmecatalog.auth', JSON.stringify(body)),
       })
+    })
+  })
+})
+
+// Interception helpers built on the API_ROUTES registry (routes.ts) — one
+// named matcher per real endpoint, so every spec that needs to spy on,
+// stub, delay, or assert-auth-on a request goes through the same source
+// of truth instead of hand-typing a glob that could drift from another
+// spec's (or component test's) version of the same route.
+
+// Plain spy/stub — category A/B (assertion) or D (data-substitution) from
+// the interception classification, depending on whether `handler` is given.
+Cypress.Commands.add('interceptRoute', (name: RouteName, handler?: RouteHandler) => {
+  return cy.intercept(API_ROUTES[name], handler).as(name)
+})
+
+// Category C — failure injection. Defaults to a network error; pass
+// { statusCode: 500 } (etc.) for a real-status failure instead.
+Cypress.Commands.add('simulateFailure', (name: RouteName, opts: Record<string, unknown> = { forceNetworkError: true }) => {
+  return cy.intercept(API_ROUTES[name], opts).as(`${name}Failure`)
+})
+
+// Category E — latency injection. req.continue() lets the real request
+// (and real response body) through; only the response is delayed, so a
+// loading-state test still sees the real data once it resolves.
+Cypress.Commands.add('simulateSlowResponse', (name: RouteName, delayMs = 1000) => {
+  return cy
+    .intercept(API_ROUTES[name], (req) => {
+      req.continue((res) => {
+        res.setDelay(delayMs)
+      })
+    })
+    .as(`${name}Slow`)
+})
+
+// One middleware intercept per named route — reads the Authorization
+// header on every matching request and asserts its shape, without ever
+// replying, so it coexists with whatever stub/spy that test's own
+// intercept already registered for the same route (see the plan's
+// route-matching section for why this has to be middleware, not a
+// second regular intercept). Call once per authenticated describe block;
+// not global — see routes.ts's header comment for where this is and
+// isn't wired in.
+Cypress.Commands.add('assertAuthenticatedWrites', (names: RouteName[]) => {
+  names.forEach((name) => {
+    cy.intercept({ ...API_ROUTES[name], middleware: true }, (req) => {
+      expect(req.headers.authorization, `${name} Authorization header`).to.match(/^Bearer .+\..+\..+$/)
     })
   })
 })

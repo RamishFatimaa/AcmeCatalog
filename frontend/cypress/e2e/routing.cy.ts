@@ -41,6 +41,21 @@ describe('Client-side routing', () => {
     })
   })
 
+  it('returns an anonymous visitor to the protected route they originally wanted, after login', { tags: '@regression' }, () => {
+    // RequireAuth attaches location.state.from when it redirects — this
+    // proves LoginPage actually reads it, not just that the redirect to
+    // login itself happens (already covered above).
+    cy.visit('/Items/Create')
+    cy.url().should('include', '/Account/Login')
+
+    cy.getBySel('login-username-input').type('testuser')
+    cy.getBySel('login-password-input').type('Test123!')
+    cy.getBySel('login-submit-btn').click()
+
+    cy.url().should('include', '/Items/Create')
+    cy.url().should('not.match', /\/Items$/)
+  })
+
   it('/Items/ImagePreview/{id} still serves real server-rendered HTML', { tags: '@smoke' }, () => {
     cy.request(`${catalogServiceUrl}/api/items`).its('body.0').then((item) => {
       cy.visit(`${catalogServiceUrl}/Items/ImagePreview/${item.id}`)

@@ -451,6 +451,24 @@ function buildPerformancePage(testRuns, jobRuns, generatedAt) {
 
   const slowest = [...finals].sort((a, b) => b.AttemptDurationMs - a.AttemptDurationMs).slice(0, 10)
 
+  // Real network response time (cy.request()'s own `duration`, recorded by
+  // a handful of SLA-style tests) vs. AttemptDurationMs (that same test's
+  // full wall-clock — setup, assertions, everything). Conflating the two
+  // was the exact gap this section exists to close: a slow suite doesn't
+  // necessarily mean a slow API, and vice versa.
+  const apiTimingRows = testRuns.filter((r) => r.IsFinalAttempt && r.ResponseTimeMs != null)
+  const apiResponseTimes = apiTimingRows.map((r) => r.ResponseTimeMs)
+  const apiP50 = median(apiResponseTimes)
+  const apiP95 = percentile(apiResponseTimes, 95)
+  const apiEndpointStats = [...groupBy(apiTimingRows, (r) => r.ApiEndpoint ?? 'Unknown endpoint').entries()]
+    .map(([endpoint, rows]) => ({
+      endpoint,
+      count: rows.length,
+      medianResponseMs: median(rows.map((r) => r.ResponseTimeMs)),
+      medianAttemptMs: median(rows.map((r) => r.AttemptDurationMs).filter((v) => v != null)),
+    }))
+    .sort((a, b) => b.medianResponseMs - a.medianResponseMs)
+
   const jobTrend = groupBy(jobFinal, (r) => r.partitionKey)
   const trendColors = ['#2d5540', '#4d7c62', '#c17a4f', '#8a5a3a', '#b08968']
   const jobSeries = [...jobTrend.entries()].map(([job, rows], i) => ({
@@ -477,6 +495,20 @@ function buildPerformancePage(testRuns, jobRuns, generatedAt) {
         <thead><tr><th>Test</th><th>Layer</th><th>Duration</th></tr></thead>
         <tbody>
           ${slowest.map((r) => `<tr><td>${escapeHtml(r.TestName)}</td><td>${LAYER_LABEL[r.partitionKey] ?? r.partitionKey}</td><td>${r.AttemptDurationMs}ms</td></tr>`).join('') || '<tr><td colspan="3">No duration data yet.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <h2>Real API response time (vs. test duration)</h2>
+    <p class="subtitle">From cy.request()'s own network timing, captured by the SLA-style tests in api-response-time.cy.ts — not test-execution wall-clock. "Test overhead" below is that same test's own AttemptDurationMs minus the real response time: everything else the test spent on (setup, assertions, retries).</p>
+    <div class="kpi-grid">
+      ${kpi(apiP50 === null ? '—' : `${Math.round(apiP50)}ms`, 'Median real API response time')}
+      ${kpi(apiP95 === null ? '—' : `${Math.round(apiP95)}ms`, 'P95 real API response time')}
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Endpoint</th><th>Samples</th><th>Median response time</th><th>Median test duration</th><th>Test overhead</th></tr></thead>
+        <tbody>
+          ${apiEndpointStats.map((s) => `<tr><td>${escapeHtml(s.endpoint)}</td><td>${s.count}</td><td>${Math.round(s.medianResponseMs)}ms</td><td>${s.medianAttemptMs === null ? '—' : `${Math.round(s.medianAttemptMs)}ms`}</td><td>${s.medianAttemptMs === null ? '—' : `${Math.round(s.medianAttemptMs - s.medianResponseMs)}ms`}</td></tr>`).join('') || '<tr><td colspan="5">No API response-time data recorded yet.</td></tr>'}
         </tbody>
       </table>
     </div>

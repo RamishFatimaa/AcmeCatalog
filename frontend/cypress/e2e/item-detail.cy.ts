@@ -50,4 +50,32 @@ describe('Item detail page', () => {
     cy.getBySel('item-price').contains('$179.99').trigger('mouseover')
     cy.getBySel('price-tooltip').should('be.visible').and('contain.text', 'Free shipping')
   })
+
+  it('renders exactly what a stubbed GET /api/items/:id response returns, not real backend data', { tags: '@regression' }, () => {
+    // Every other intercept in this suite stubs a failure/delay or spies on
+    // an outgoing request — nothing stubs a real success response body and
+    // proves the page renders exactly that data. { fixture } does both at
+    // once: response control, and a payload with values (id 999001,
+    // "fixture-user") that can't coincidentally match anything DbSeeder
+    // ever seeds, so a passing assertion here can only mean the stub was
+    // actually used, not that it happened to line up with real data.
+    cy.intercept('GET', `${catalogServiceUrl}/api/items/999001`, { fixture: 'item-detail-response.json' }).as('getStubbedItem')
+
+    cy.visit('/Items/999001')
+    cy.wait('@getStubbedItem')
+
+    cy.getBySel('detail-name').should('have.text', 'Stubbed Response Fixture Item')
+    cy.getBySel('detail-price').should('contain.text', '$777.77')
+    cy.getBySel('detail-description').should('have.text', 'This exact description only ever comes from the fixture-stubbed response, never from a real backend call.')
+  })
+
+  it('shows an error, not a blank page, when the item fails to load', { tags: '@regression' }, () => {
+    cy.allowConsoleErrors()
+    cy.simulateFailure('itemDetail')
+
+    cy.visit('/Items/999001')
+
+    cy.wait('@itemDetailFailure')
+    cy.getBySel('item-detail-error').should('be.visible')
+  })
 })

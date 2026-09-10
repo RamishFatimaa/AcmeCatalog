@@ -40,10 +40,12 @@ export function CatalogGrid({ onEdit }: CatalogGridProps) {
   const [quickViewItem, setQuickViewItem] = useState<Item | null>(null)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'danger' } | null>(null)
   const [loadError, setLoadError] = useState(false)
+  const [categoriesError, setCategoriesError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   const draggingRef = useRef<Item | null>(null)
+  const preDragOrderRef = useRef<Item[] | null>(null)
 
   const priceFilterActive = minPrice > PRICE_SLIDER_MIN || maxPrice < PRICE_SLIDER_MAX
 
@@ -63,7 +65,9 @@ export function CatalogGrid({ onEdit }: CatalogGridProps) {
   }, [term, category, sort, minPrice, maxPrice, priceFilterActive])
 
   useEffect(() => {
-    getCategories().then(setCategories)
+    getCategories()
+      .then(setCategories)
+      .catch(() => setCategoriesError(true))
   }, [])
 
   useEffect(() => {
@@ -73,6 +77,7 @@ export function CatalogGrid({ onEdit }: CatalogGridProps) {
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE)
+    setSelectedIds(new Set())
   }, [term, category, sort, minPrice, maxPrice])
 
   useEffect(() => {
@@ -133,11 +138,24 @@ export function CatalogGrid({ onEdit }: CatalogGridProps) {
         setSelectedIds(new Set())
         loadItems()
       })
-      .catch(() => setToast({ message: 'Could not delete the selected items.', type: 'danger' }))
+      .catch(() => {
+        // Promise.all rejects on the first failure, but any deletes that
+        // already succeeded really did happen server-side — reload so the
+        // grid reflects that partial reality instead of showing stale,
+        // already-deleted items alongside a generic failure toast.
+        setToast({ message: 'Could not delete the selected items.', type: 'danger' })
+        loadItems()
+      })
   }
 
   function handleDragStart(item: Item) {
     draggingRef.current = item
+    // Snapshot the order as it stood before any drag-driven reordering —
+    // handleDragOver below mutates `items` optimistically as the drag
+    // moves, so by the time handleDragEnd's request fails, `items` is
+    // already the (possibly wrong) new order and can't be used to
+    // recover the old one.
+    preDragOrderRef.current = items
   }
 
   function handleDragOver(target: Item, event: React.DragEvent) {
@@ -157,10 +175,14 @@ export function CatalogGrid({ onEdit }: CatalogGridProps) {
     draggingRef.current = null
     if (!token) return
 
+    const preDragOrder = preDragOrderRef.current
     const orderedIds = items.map((i) => i.id)
     reorderItems(orderedIds, token)
       .then(() => setToast({ message: 'Catalog order updated.', type: 'success' }))
-      .catch(() => setToast({ message: 'Could not save the new order.', type: 'danger' }))
+      .catch(() => {
+        if (preDragOrder) setItems(preDragOrder)
+        setToast({ message: 'Could not save the new order.', type: 'danger' })
+      })
   }
 
   return (
@@ -190,6 +212,11 @@ export function CatalogGrid({ onEdit }: CatalogGridProps) {
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
+          {categoriesError && (
+            <div className="text-danger small mt-1" data-testid="categories-error">
+              Could not load categories.
+            </div>
+          )}
         </div>
         <div className="col-md-2">
           <button

@@ -132,6 +132,12 @@ function rowsFromCypressResults(resultsDir) {
           TotalAttempts: total,
           FailureMessage: attempt.state === 'failed' ? truncate(test.displayError) : null,
           FailureCategory: attempt.state === 'failed' ? failureCategory : null,
+          // Real network duration from cy.request()'s own `duration` field,
+          // for the handful of SLA-style tests that measure it — distinct
+          // from AttemptDurationMs above (test-execution wall-clock).
+          // null for every other test, which is most of them.
+          ApiEndpoint: test.apiEndpoint ?? null,
+          ResponseTimeMs: isFinal ? (test.responseTimeMs ?? null) : null,
         })
       })
     }
@@ -144,8 +150,15 @@ function rowsFromCypressResults(resultsDir) {
 
 const BACKEND_UNIT_CLASSES = new Set(['ItemEnricherTests'])
 
+// Both real consumer/provider Pact test classes — lumping these into
+// 'backend-integration' would blur the exact distinction this dashboard
+// otherwise exists to keep, given how much of this round was specifically
+// about proving Pact coverage is real and separate from every other layer.
+const CONTRACT_PACT_CLASSES = new Set(['IdentityClientPactTests', 'IdentityServiceProviderVerificationTests'])
+
 function classNameToLayer(className) {
   const short = className.split('.').pop()
+  if (CONTRACT_PACT_CLASSES.has(short)) return 'contract-pact'
   return BACKEND_UNIT_CLASSES.has(short) ? 'backend-unit' : 'backend-integration'
 }
 
@@ -204,6 +217,46 @@ function rowsFromTrxDir(trxDir) {
   return rows
 }
 
+// ---- Vitest source: --reporter=json output (the frontend's Pact consumer
+// tests — real structure confirmed directly against a real run, not
+// assumed: testResults[].assertionResults[] with title/status/duration/
+// failureMessages, no retries here either so always exactly one attempt ----
+
+function mapVitestStatus(status) {
+  if (status === 'passed') return 'passed'
+  if (status === 'failed') return 'failed'
+  return 'skipped'
+}
+
+function rowsFromVitestResults(jsonPath) {
+  const report = JSON.parse(readFileSync(jsonPath, 'utf8'))
+  const rows = []
+
+  for (const file of report.testResults ?? []) {
+    const specPath = relative(process.cwd(), file.name)
+    for (const assertion of file.assertionResults ?? []) {
+      const outcome = mapVitestStatus(assertion.status)
+      const failureMessage = assertion.failureMessages?.[0] ?? null
+
+      rows.push({
+        ...baseRow('contract-pact', assertion.fullName, null),
+        rowKey: `${env.runId}_${env.jobName}_${env.matrixIndex}_${shortHash(specPath + assertion.fullName)}_1`,
+        SpecOrClass: specPath,
+        AttemptIndex: 1,
+        AttemptState: outcome,
+        AttemptDurationMs: assertion.duration ?? null,
+        IsFinalAttempt: true,
+        FinalOutcome: outcome,
+        TotalAttempts: 1,
+        FailureMessage: outcome === 'failed' ? truncate(failureMessage) : null,
+        FailureCategory: outcome === 'failed' ? classifyFailure(failureMessage) : null,
+      })
+    }
+  }
+
+  return rows
+}
+
 // ---- push ----
 
 async function pushRows(rows) {
@@ -243,8 +296,10 @@ async function main() {
     rows = rowsFromCypressResults(arg ?? 'cypress/results')
   } else if (mode === 'dotnet') {
     rows = rowsFromTrxDir(arg ?? 'TestResults')
+  } else if (mode === 'vitest') {
+    rows = rowsFromVitestResults(arg ?? 'vitest-report.json')
   } else {
-    console.error(`push-test-metrics: unknown mode "${mode}" (expected "cypress" or "dotnet")`)
+    console.error(`push-test-metrics: unknown mode "${mode}" (expected "cypress", "dotnet", or "vitest")`)
     process.exit(0)
   }
 

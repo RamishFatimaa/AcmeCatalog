@@ -80,6 +80,19 @@ describe('Authentication', () => {
     cy.url().should('include', '/Account/Login')
   })
 
+  it('shows an error, not stuck "..." placeholders, when the profile fetch fails', { tags: '@regression' }, () => {
+    cy.allowConsoleErrors()
+    cy.assertAuthenticatedWrites(['authMe'])
+    cy.simulateFailure('authMe')
+    cy.loginSession()
+
+    cy.visit('/Account/Profile')
+
+    cy.wait('@authMeFailure')
+    cy.getBySel('profile-error').should('be.visible')
+    cy.getBySel('profile-username').should('have.text', '...')
+  })
+
   it('treats a stored session with a past expiresAtUtc as logged out', { tags: '@regression' }, () => {
     // Real, previously-untested logic in AuthContext.tsx's readStoredAuth():
     // an expired stored token is deliberately discarded on load, not just

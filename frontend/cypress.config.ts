@@ -21,15 +21,20 @@ export default defineConfig({
     runMode: 1,
     openMode: 0,
   },
+  // Top-level, not nested under `e2e` — cypress/support/routes.ts reads
+  // these to build API_ROUTES for BOTH testing types (component specs
+  // like CatalogGrid.cy.tsx import it too, not just e2e specs), so it
+  // has to be visible under --component as well, not just --component's
+  // absent e2e-only config.
+  env: {
+    identityServiceUrl: 'http://localhost:5301',
+    catalogServiceUrl: 'http://localhost:5302',
+  },
   e2e: {
     // The frontend's own origin now, not either backend's — it's a
     // standalone static site talking to identity-service/catalog-service
     // over CORS, not something either of them serves.
     baseUrl: 'http://localhost:5173',
-    env: {
-      identityServiceUrl: 'http://localhost:5301',
-      catalogServiceUrl: 'http://localhost:5302',
-    },
     setupNodeEvents(on, config) {
       installLogsPrinter(on)
       // @cypress/grep reads --expose grepTags=@smoke (see package.json's

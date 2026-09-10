@@ -1,0 +1,60 @@
+{
+  "consumer": {
+    "name": "catalog-service"
+  },
+  "interactions": [
+    {
+      "description": "a request to resolve one known user id",
+      "pending": false,
+      "providerStates": [
+        {
+          "name": "a user exists",
+          "params": {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "username": "pact-fixture-user"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/internal/users",
+        "query": {
+          "ids": [
+            "00000000-0000-4000-8000-000000000001"
+          ]
+        }
+      },
+      "response": {
+        "body": {
+          "content": [
+            {
+              "id": "00000000-0000-4000-8000-000000000001",
+              "username": "pact-fixture-user"
+            }
+          ],
+          "contentType": "application/json",
+          "encoded": false
+        },
+        "headers": {
+          "Content-Type": [
+            "application/json"
+          ]
+        },
+        "status": 200
+      },
+      "type": "Synchronous/HTTP"
+    }
+  ],
+  "metadata": {
+    "pactRust": {
+      "ffi": "0.4.27",
+      "models": "1.2.8"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    }
+  },
+  "provider": {
+    "name": "identity-service"
+  }
+}

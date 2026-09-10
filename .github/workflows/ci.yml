@@ -47,10 +47,16 @@ jobs:
       # IdentityService.Tests'. Letting dotnet auto-name each project's file
       # (it includes the assembly name) fixes both this step's glob and the
       # metrics push below.
+      # TestCategory!=Pact excludes IdentityClientPactTests and
+      # InternalUsersPactVerificationTests — they need PACT_BROKER_*
+      # secrets (and the provider one boots a real identity-service
+      # process itself), so they run in their own dedicated jobs below
+      # instead of here.
       - name: Run backend tests
         run: >
           dotnet test AcmeCatalog.slnx
           --no-build --configuration Release
+          --filter "TestCategory!=Pact"
           --logger "trx"
           --results-directory ./TestResults
 
@@ -98,6 +104,188 @@ jobs:
         working-directory: scripts/metrics
         env:
           METRICS_JOB_NAME: backend-tests
+        run: node push-test-metrics.mjs dotnet ../../TestResults
+
+  # Real contracts against identity-service, from both its real consumers —
+  # catalog-service's server-to-server call (/internal/users) and the
+  # frontend's own login call. See PROJECT.md's "known gaps" section,
+  # IdentityClientPactTests.cs, and pact/auth.consumer.pact.test.ts. Each
+  # consumer publishes independently (Pact's mock server is local,
+  # in-process, needs nothing else); the one provider-verify job needs
+  # both published first, so it depends on both explicitly.
+  pact-consumer-catalog:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore tests/CatalogService.Tests/CatalogService.Tests.csproj
+
+      - name: Run consumer Pact test
+        run: >
+          dotnet test tests/CatalogService.Tests/CatalogService.Tests.csproj
+          --filter "TestCategory=Pact"
+          --logger "trx"
+          --results-directory ./TestResults
+
+      - name: Publish pact to PactFlow
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf -o /dev/null -w "published: HTTP %{http_code}\n" \
+            -X PUT "$PACT_BROKER_BASE_URL/pacts/provider/identity-service/consumer/catalog-service/version/${{ github.sha }}" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @pacts/catalog-service-identity-service.json
+
+      - name: Setup Node
+        if: always()
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/metrics/package-lock.json
+
+      - name: Install metrics dependencies
+        if: always()
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        if: always()
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push test metrics
+        if: always()
+        working-directory: scripts/metrics
+        env:
+          METRICS_JOB_NAME: pact-consumer-catalog
+        run: node push-test-metrics.mjs dotnet ../../TestResults
+
+  pact-consumer-frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run consumer Pact test
+        working-directory: frontend
+        run: npx vitest run --reporter=json --outputFile=vitest-report.json
+
+      - name: Publish pact to PactFlow
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf -o /dev/null -w "published: HTTP %{http_code}\n" \
+            -X PUT "$PACT_BROKER_BASE_URL/pacts/provider/identity-service/consumer/frontend/version/${{ github.sha }}" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @pacts/frontend-identity-service.json
+
+      - name: Install metrics dependencies
+        if: always()
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        if: always()
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push test metrics
+        if: always()
+        working-directory: scripts/metrics
+        env:
+          METRICS_JOB_NAME: pact-consumer-frontend
+        run: node push-test-metrics.mjs vitest ../../frontend/vitest-report.json
+
+  pact-provider-verify:
+    runs-on: ubuntu-latest
+    needs: [pact-consumer-catalog, pact-consumer-frontend]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore tests/IdentityService.Tests/IdentityService.Tests.csproj
+
+      - name: Build identity-service
+        run: dotnet build services/identity-service/IdentityService.csproj --configuration Release
+
+      # The test itself boots a real identity-service process (see
+      # IdentityServiceProviderVerificationTests.cs's StartService) —
+      # nothing to start here beyond the test run. WithPactBrokerSource has
+      # no consumer filter, so this one run verifies both consumers' pacts.
+      - name: Verify provider against every published contract
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: >
+          dotnet test tests/IdentityService.Tests/IdentityService.Tests.csproj
+          --filter "TestCategory=Pact"
+          --logger "trx"
+          --results-directory ./TestResults
+
+      - name: Setup Node
+        if: always()
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/metrics/package-lock.json
+
+      - name: Install metrics dependencies
+        if: always()
+        working-directory: scripts/metrics
+        run: npm ci
+
+      - name: Azure login (OIDC)
+        if: always()
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Push test metrics
+        if: always()
+        working-directory: scripts/metrics
+        env:
+          METRICS_JOB_NAME: pact-provider-verify
         run: node push-test-metrics.mjs dotnet ../../TestResults
 
   component-tests:
@@ -162,7 +350,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Every spec in this repo has only ever run in Cypress's bundled
+        # Electron — grepped confirmed zero --browser usage anywhere before
+        # this. Firefox goes on e2e-smoke only (not e2e-regression, which
+        # already triples the container count) via cypress-io/github-action's
+        # own `browser:` input below — one extra job, not a second full
+        # matrix, since this is a real-browser sanity check, not a second
+        # copy of the whole regression suite. Distinct ci-build-id/group
+        # per browser below so Cypress Cloud's parallel load-balancer never
+        # mixes a 2-machine Electron run with a 1-machine Firefox one.
+        browser: [electron]
         containers: [1, 2]
+        include:
+          - browser: firefox
+            containers: 1
 
     steps:
       - name: Checkout
@@ -238,7 +439,8 @@ jobs:
           start: npm run dev
           wait-on: 'http://localhost:5173'
           wait-on-timeout: 90
-          command: npm run e2e:smoke -- --record --parallel --ci-build-id ${{ github.run_id }}-smoke --group e2e-smoke
+          browser: ${{ matrix.browser }}
+          command: npm run e2e:smoke -- --record --parallel --ci-build-id ${{ github.run_id }}-smoke-${{ matrix.browser }} --group e2e-smoke-${{ matrix.browser }}
         env:
           COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
@@ -261,7 +463,7 @@ jobs:
         working-directory: scripts/metrics
         env:
           METRICS_JOB_NAME: e2e-smoke
-          METRICS_MATRIX_INDEX: ${{ matrix.containers }}
+          METRICS_MATRIX_INDEX: ${{ matrix.browser }}-${{ matrix.containers }}
         run: node push-test-metrics.mjs cypress ../../frontend/cypress/results
 
   e2e-regression:
@@ -430,7 +632,7 @@ jobs:
   # curl loops at all. Deliberately excludes ai-prompt-demo — non-gating,
   # not part of the suite-health story.
   record-job-timing:
-    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression]
+    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression, pact-consumer-catalog, pact-consumer-frontend, pact-provider-verify]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -473,7 +675,7 @@ jobs:
   # per deploy, so sharing one app with the frontend would mean every CI run
   # here also re-deploys (or races) the production React app.
   publish-dashboard:
-    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression, record-job-timing]
+    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression, pact-consumer-catalog, pact-consumer-frontend, pact-provider-verify, record-job-timing]
     if: always()
     runs-on: ubuntu-latest
     permissions:

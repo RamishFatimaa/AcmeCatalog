@@ -1,14 +1,29 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
-// mocha-junit-reporter (cypress.config.ts's `reporter`) only ever writes the
-// *final* outcome per test — with retries.runMode:1, a test that fails then
-// passes on retry produces a clean, silent green in that XML, with zero
-// trace it was ever unstable. Cypress's own after:spec results carry the
-// full per-attempt breakdown (results.tests[].attempts[]) that JUnit
-// discards; this writes it to a separate JSON per spec so the metrics
-// pipeline can see retries at all, which nothing else in this repo does.
+// AttemptDurationMs (from Cypress's own t.duration below) is test-execution
+// wall-clock — setup, rendering, every assertion, everything a retry
+// re-runs. It is not the same measurement as how long the real HTTP
+// response took, and a regression in one can hide inside the other's
+// noise. Only cy.request()'s resolved response object exposes real network
+// timing (verified directly against a running service this session —
+// cy.intercept()'s interception object exposes no timing field at all), so
+// a handful of SLA-style tests (api-response-time.cy.ts) call
+// cy.task('recordApiResponseTime', ...) with that real duration. Tasks are
+// the only channel from spec code back to this Node-side plugin — Cypress's
+// own results.tests[] shape below is fixed and not extensible from a
+// running test. Keyed by test title and cleared per spec so unrelated
+// specs sharing this one long-lived plugin process never cross-contaminate.
+const responseTimesByTestTitle = new Map<string, { endpoint: string; responseTimeMs: number }>()
+
 export function recordAttempts(on: Cypress.PluginEvents) {
+  on('task', {
+    recordApiResponseTime({ testTitle, endpoint, responseTimeMs }: { testTitle: string; endpoint: string; responseTimeMs: number }) {
+      responseTimesByTestTitle.set(testTitle, { endpoint, responseTimeMs })
+      return null
+    },
+  })
+
   on('after:spec', (spec, results) => {
     if (!results) return
 
@@ -22,14 +37,21 @@ export function recordAttempts(on: Cypress.PluginEvents) {
     // per-attempt, so every failed attempt shares the same message.
     const record = {
       spec: spec.relative,
-      tests: (results.tests ?? []).map((t) => ({
-        title: t.title.join(' > '),
-        state: t.state,
-        duration: t.duration,
-        displayError: t.displayError ?? null,
-        attempts: (t.attempts ?? []).map((a) => ({ state: a.state })),
-      })),
+      tests: (results.tests ?? []).map((t) => {
+        const title = t.title.join(' > ')
+        const responseTime = responseTimesByTestTitle.get(title) ?? null
+        return {
+          title,
+          state: t.state,
+          duration: t.duration,
+          displayError: t.displayError ?? null,
+          attempts: (t.attempts ?? []).map((a) => ({ state: a.state })),
+          apiEndpoint: responseTime?.endpoint ?? null,
+          responseTimeMs: responseTime?.responseTimeMs ?? null,
+        }
+      }),
     }
+    responseTimesByTestTitle.clear()
 
     const safeName = spec.relative.replace(/[\\/]/g, '__')
     fs.writeFileSync(path.join(outDir, `attempts-${safeName}.json`), JSON.stringify(record))

@@ -21,4 +21,25 @@ describe('Catalog CSV export', () => {
     cy.readFile('cypress/downloads/acmecatalog-items.csv', { timeout: 10000 })
       .should('include', 'Id,Name,Price,Category,Description,DateAdded')
   })
+
+  it('exports the whole catalog even while a search filter narrows the grid, by design', { tags: '@regression' }, () => {
+    // Locks in a real product decision, confirmed with the user rather than
+    // assumed: export always returns everything, regardless of the active
+    // filter — GetAll's export action hard-codes term:null, category:null
+    // (ItemsApiController.cs), it never reads the query string at all. This
+    // proves the *intended* behavior with a real filtered UI state, not just
+    // by reading the controller and noticing the endpoint ignores its own
+    // query parameters.
+    cy.request(`${catalogServiceUrl}/api/items`).then(({ body: allItems }) => {
+      const fullCount = allItems.length
+
+      cy.getBySel('search-input').type('Headphones')
+      cy.getBySel('item-card').should('have.length.lessThan', fullCount)
+
+      cy.request(`${catalogServiceUrl}/api/items/export`).then((response) => {
+        const dataRowCount = response.body.trim().split('\n').length - 1
+        expect(dataRowCount, 'export row count should match the full catalog, not the active filter').to.eq(fullCount)
+      })
+    })
+  })
 })

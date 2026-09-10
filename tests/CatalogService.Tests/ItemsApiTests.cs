@@ -217,5 +217,38 @@ public class ItemsApiTests
         Assert.That(afterDelete.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
     }
 
+    [Test]
+    public async Task UpdateAndDelete_ByADifferentAuthenticatedUser_Succeeds()
+    {
+        // Locks in a real product decision, confirmed with the user rather
+        // than assumed: inventory is shared across all authenticated users
+        // by design — ItemsApiController has [Authorize] only, deliberately
+        // no ownership check (there's no CreatedByUserId comparison anywhere
+        // in Update/Delete). Without this test, that's only ever provable by
+        // reading the controller and noticing what's absent; this proves the
+        // *intended* behavior directly, so a future ownership check added by
+        // accident (e.g. copying a pattern from another app) would fail a
+        // real test here instead of silently changing behavior.
+        Authorize(MintToken(subjectId: "user-a"));
+        var createResponse = await _client.PostAsJsonAsync("/api/items", ValidItemBody("Shared Inventory Item"));
+        var created = await createResponse.Content.ReadFromJsonAsync<ItemDto>();
+
+        Authorize(MintToken(subjectId: "user-b"));
+        var updateResponse = await _client.PutAsJsonAsync($"/api/items/{created!.Id}", new
+        {
+            id = created.Id,
+            name = "Shared Inventory Item (edited by user-b)",
+            price = 30.0,
+            description = "Edited by a different authenticated user than the creator",
+            category = "Electronics"
+        });
+        Assert.That(updateResponse.StatusCode, Is.EqualTo(HttpStatusCode.NoContent),
+            "any authenticated user may edit any item — no ownership check exists, by design");
+
+        var deleteResponse = await _client.DeleteAsync($"/api/items/{created.Id}");
+        Assert.That(deleteResponse.StatusCode, Is.EqualTo(HttpStatusCode.NoContent),
+            "any authenticated user may delete any item — no ownership check exists, by design");
+    }
+
     private record ItemDto(int Id, string Name, decimal Price, string Category, string CreatedByDisplayName);
 }

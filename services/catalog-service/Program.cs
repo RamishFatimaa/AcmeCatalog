@@ -133,6 +133,12 @@ builder.Services.AddSwaggerGen(options =>
     });
 
     options.OperationFilter<AuthorizeCheckOperationFilter>();
+    // Without this, Swashbuckle marks every reference-type property
+    // (any plain `string`, nullable or not) as "nullable": true in the
+    // generated schema, since it can't otherwise see this project's own
+    // <Nullable>enable</Nullable> annotations — the published contract
+    // would be looser than what the code actually guarantees.
+    options.SupportNonNullableReferenceTypes();
 });
 
 var app = builder.Build();

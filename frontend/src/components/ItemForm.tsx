@@ -29,6 +29,7 @@ export function ItemForm({ initial, onSubmit, onCancel }: ItemFormProps) {
   const [imageMode, setImageMode] = useState<'url' | 'file'>('url')
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [errors, setErrors] = useState<FieldErrors>({})
+  const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   function validate(): FieldErrors {
@@ -45,6 +46,7 @@ export function ItemForm({ initial, onSubmit, onCancel }: ItemFormProps) {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    setError(null)
     const validationErrors = validate()
     setErrors(validationErrors)
     if (Object.keys(validationErrors).length > 0) return
@@ -72,7 +74,7 @@ export function ItemForm({ initial, onSubmit, onCancel }: ItemFormProps) {
         }
         setErrors(serverErrors)
       } else {
-        throw err
+        setError('Something went wrong saving this item. Please try again.')
       }
     } finally {
       setSubmitting(false)
@@ -86,6 +88,8 @@ export function ItemForm({ initial, onSubmit, onCancel }: ItemFormProps) {
       data-testid="item-form"
       className="bg-white border rounded-4 p-4 p-md-5 shadow-sm"
     >
+      {error && <div className="alert alert-danger" data-testid="item-form-error-summary">{error}</div>}
+
       <div className="mb-3">
         <label className="form-label" htmlFor="item-name">Name</label>
         <input

@@ -6,15 +6,19 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "identity": "dotnet run --project ../services/identity-service/IdentityService.csproj",
+    "catalog": "dotnet run --project ../services/catalog-service/CatalogService.csproj",
     "lint": "oxlint",
     "preview": "vite preview",
     "e2e": "cypress run",
+    "start:all": "concurrently -n identity,catalog,web -c blue,green,magenta \"npm:identity\" \"npm:catalog\" \"npm:dev\"",
     "e2e:open": "cypress open",
     "e2e:smoke": "cypress run --expose grepTags=@smoke,grepFilterSpecs=true",
     "e2e:regression": "cypress run --config excludeSpecPattern=**/ai-prompt-demo.cy.ts",
     "e2e:ai-demo": "cypress run --spec cypress/e2e/ai-prompt-demo.cy.ts --record",
     "component": "cypress run --component",
-    "component:open": "cypress open --component"
+    "component:open": "cypress open --component",
+    "pact": "vitest run"
   },
   "dependencies": {
     "bootstrap": "^5.3.8",
@@ -24,17 +28,22 @@
   },
   "devDependencies": {
     "@cypress/grep": "^7.0.0",
+    "@pact-foundation/pact": "^17.1.4",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.1.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "axe-core": "^4.13.0",
+    "concurrently": "^10.0.5",
     "cypress": "^15.20.1",
     "cypress-axe": "^1.7.0",
     "cypress-terminal-report": "^7.3.3",
     "mocha-junit-reporter": "^2.2.1",
     "oxlint": "^1.79.0",
     "typescript": "~6.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^5.0.0"
   }
 }

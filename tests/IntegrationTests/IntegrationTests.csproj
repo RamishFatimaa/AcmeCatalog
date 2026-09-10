@@ -8,22 +8,23 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- Deliberately no ProjectReference to either service and no
+       WebApplicationFactory: this project boots both services as real OS
+       processes (real dotnet run, real ports, real HTTP between them) —
+       the one thing AuthApiTests.cs/ItemsApiTests.cs and
+       IdentityClientResilienceTests.cs each individually don't cover,
+       since each only exercises one service in isolation (the second real,
+       the other either absent or a WireMock stand-in). -->
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.0" />
     <PackageReference Include="NUnit" Version="4.3.2" />
     <PackageReference Include="NUnit.Analyzers" Version="4.7.0" />
     <PackageReference Include="NUnit3TestAdapter" Version="5.0.0" />
-    <PackageReference Include="PactNet" Version="5.0.1" />
   </ItemGroup>
 
   <ItemGroup>
     <Using Include="NUnit.Framework" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\services\identity-service\IdentityService.csproj" />
   </ItemGroup>
 
 </Project>

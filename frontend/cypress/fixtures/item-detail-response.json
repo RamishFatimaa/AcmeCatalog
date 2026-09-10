@@ -1,0 +1,11 @@
+{
+  "id": 999001,
+  "name": "Stubbed Response Fixture Item",
+  "price": 777.77,
+  "description": "This exact description only ever comes from the fixture-stubbed response, never from a real backend call.",
+  "category": "Electronics",
+  "imageUrl": null,
+  "sortOrder": 0,
+  "dateAdded": "2026-01-01T00:00:00Z",
+  "createdByDisplayName": "fixture-user"
+}
