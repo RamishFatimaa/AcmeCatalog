@@ -146,6 +146,25 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @pacts/catalog-service-identity-service.json
 
+      # Without this, "Can I Deploy?" has a real, published version but no
+      # branch to find it by — confirmed directly against the broker's own
+      # UI ("no versions exist for that branch") before this was added.
+      # Branches and tags are genuinely separate resources on this broker
+      # (confirmed directly: PUT .../tags/{tag} creates a tag, leaves
+      # _embedded.branchVersions empty; this branches/{branch}/versions/{v}
+      # form is the one that actually populates it) — not interchangeable
+      # naming for the same thing.
+      - name: Record consumer version's branch
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf -o /dev/null -w "branch recorded: HTTP %{http_code}\n" \
+            -X PUT "$PACT_BROKER_BASE_URL/pacticipants/catalog-service/branches/${{ github.ref_name }}/versions/${{ github.sha }}" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+
       - name: Setup Node
         if: always()
         uses: actions/setup-node@v4

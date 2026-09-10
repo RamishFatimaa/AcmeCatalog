@@ -107,6 +107,17 @@ public class IdentityServiceProviderVerificationTests
         Assert.That(brokerUrl, Is.Not.Null.And.Not.Empty, "PACT_BROKER_BASE_URL must be set to verify against the published contract.");
         Assert.That(brokerToken, Is.Not.Null.And.Not.Empty, "PACT_BROKER_TOKEN must be set to verify against the published contract.");
 
+        // A literal "test" string with no branch, published here previously,
+        // is exactly why PactFlow's "Can I Deploy?" reported "no versions
+        // exist for that branch" — real, confirmed directly against the
+        // broker's own UI, not a hypothetical. A real provider version
+        // (the actual commit being verified) tagged to the actual branch
+        // it's running on is what that check needs to have anything to
+        // find. "local"/"local-branch" are honest fallbacks for a run
+        // outside CI, not silently wrong defaults.
+        var providerVersion = Environment.GetEnvironmentVariable("GITHUB_SHA") ?? "local";
+        var providerBranch = Environment.GetEnvironmentVariable("GITHUB_REF_NAME") ?? "local-branch";
+
         var config = new PactVerifierConfig();
 
         using var verifier = new PactVerifier("identity-service", config);
@@ -116,7 +127,7 @@ public class IdentityServiceProviderVerificationTests
             {
                 options.TokenAuthentication(brokerToken!);
                 options.EnablePending();
-                options.PublishResults("test");
+                options.PublishResults(providerVersion, publish => publish.ProviderBranch(providerBranch));
             })
             .WithProviderStateUrl(new Uri(_stateUrl))
             .Verify();
