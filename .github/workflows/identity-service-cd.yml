@@ -1,14 +1,19 @@
 name: Identity Service CD
 
-# Independent of catalog-service's deploy — only fires when this service's
-# own files change, which is the actual point of splitting the monolith:
-# these two now version and ship on their own schedules.
+# Triggers after CI finishes (not independently on push) so the
+# can-i-deploy gate below always checks THIS commit's real, freshly-
+# published Pact verification results — not whatever the broker happened
+# to have from an earlier push, still catching up in parallel. The real
+# tradeoff: deploys now start only once the full CI pipeline (~4 min)
+# completes, not immediately. workflow_run has no `paths:` filter (unlike
+# the old push trigger), so path-scoping — deploy only when this service's
+# own files changed, the actual point of splitting the monolith — is done
+# by hand in check-changed below instead.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [stage]
-    paths:
-      - 'services/identity-service/**'
-      - '.github/workflows/identity-service-cd.yml'
   workflow_dispatch:
 
 permissions:
@@ -21,12 +26,79 @@ env:
   RESOURCE_GROUP: acmecatalog-rg
 
 jobs:
+  check-changed:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      # workflow_run's own github.sha is the default branch's CURRENT tip
+      # at trigger time, not the commit CI actually ran against — a real,
+      # well-known gotcha. head_sha is the correct one; workflow_dispatch
+      # has no workflow_run context at all, so it falls back to github.sha,
+      # which IS correct for that event.
+      - name: Resolve commit under test
+        id: sha
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.sha.outputs.sha }}
+          fetch-depth: 2
+
+      - name: Check whether identity-service changed
+        id: diff
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only HEAD^ HEAD | grep -qE '^(services/identity-service/|\.github/workflows/identity-service-cd\.yml)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  can-i-deploy:
+    needs: check-changed
+    if: needs.check-changed.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # identity-service is the Pact PROVIDER for both catalog-service and
+      # frontend — before deploying it, the real question is whether THIS
+      # version still satisfies both of their latest verified stage-branch
+      # pacts. See scripts/pact/can-i-deploy.mjs for why this only gates on
+      # CDCT (classic consumer-driven) results, not the BDCT (OpenAPI
+      # bidirectional) ones — the latter can't pass yet (provider self-
+      # verification results aren't wired up), and gating on it would
+      # block every deploy permanently, not just genuinely broken ones.
+      - name: Check Pact contracts before deploying
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+          CID_PACTICIPANT: identity-service
+          CID_VERSION: ${{ needs.check-changed.outputs.sha }}
+          CID_BRANCH: stage
+          CID_DEPENDENCIES: catalog-service,frontend
+        run: node scripts/pact/can-i-deploy.mjs
+
   deploy:
+    needs: [check-changed, can-i-deploy]
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-changed.outputs.sha }}
 
       # Docker image repository names must be lowercase; github.repository_owner
       # isn't (it's "RamishFatimaa"), so this can't just be inlined in `env:`.
@@ -46,7 +118,7 @@ jobs:
           context: services/identity-service
           push: true
           tags: |
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:${{ needs.check-changed.outputs.sha }}
             ${{ env.IMAGE_NAME }}:latest
 
       - name: Azure login (OIDC)
@@ -61,4 +133,4 @@ jobs:
           az containerapp update \
             --name ${{ env.CONTAINER_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            --image ${{ env.IMAGE_NAME }}:${{ needs.check-changed.outputs.sha }}
