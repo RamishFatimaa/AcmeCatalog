@@ -82,8 +82,13 @@ function evaluate(matrixResponse) {
     console.log(`  (informational, not gated) BDCT ${row.consumer.name} <-> ${row.provider.name}: ${status}`)
   }
 
+  // Zero rows looks identical whether verification hasn't started yet
+  // (CD races CI, still expected to appear) or will never happen (a real
+  // problem) — both read as "nothing here." Treated as pending and
+  // retried up to MAX_ATTEMPTS; only main()'s final timeout after
+  // exhausting those calls it a real failure.
   if (cdctRows.length === 0) {
-    return { state: 'blocked', reason: 'no consumer-driven contract verification found for this version yet' }
+    return { state: 'pending' }
   }
   if (cdctRows.some((row) => row.verificationResult == null)) {
     return { state: 'pending' }
