@@ -265,10 +265,65 @@ jobs:
       - name: Build identity-service
         run: dotnet build services/identity-service/IdentityService.csproj --configuration Release
 
-      # The test itself boots a real identity-service process (see
-      # IdentityServiceProviderVerificationTests.cs's StartService) —
-      # nothing to start here beyond the test run. WithPactBrokerSource has
-      # no consumer filter, so this one run verifies both consumers' pacts.
+      # Bidirectional contract testing's other half, alongside the classic
+      # consumer/provider Pact verification below: publishing identity-
+      # service's REAL, live OpenAPI document (Swashbuckle-generated, same
+      # one openapi-schema.cy.ts already validates live responses against)
+      # as a provider contract lets PactFlow cross-check it against every
+      # consumer's pact directly — no test run required on the provider
+      # side for this comparison, since it's a schema diff PactFlow runs
+      # itself once both sides are published. Boots its own short-lived
+      # instance rather than reusing the Pact verifier's (that one only
+      # lives inside the test process below, torn down before this step
+      # could ever reach it).
+      - name: Start identity-service (for OpenAPI contract publish)
+        working-directory: services/identity-service
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+        run: |
+          nohup dotnet run --no-build --configuration Release --urls http://localhost:5701 > "$GITHUB_WORKSPACE/identity-openapi.log" 2>&1 &
+          echo $! > "$GITHUB_WORKSPACE/identity-openapi.pid"
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5701/health > /dev/null; then echo "identity-service is up"; exit 0; fi
+            sleep 1
+          done
+          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity-openapi.log"; exit 1
+
+      - name: Publish identity-service OpenAPI provider contract
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf http://localhost:5701/swagger/v1/swagger.json -o /tmp/identity-openapi.json
+          python3 -c "
+          import json, base64
+          content = open('/tmp/identity-openapi.json', 'rb').read()
+          payload = {
+              'pacticipantVersionNumber': '${{ github.sha }}',
+              'branch': '${{ github.ref_name }}',
+              'contract': {
+                  'content': base64.b64encode(content).decode(),
+                  'contentType': 'application/json',
+                  'specification': 'oas',
+              },
+          }
+          json.dump(payload, open('/tmp/openapi-publish-payload.json', 'w'))
+          "
+          curl -sf -w "\nopenapi contract published: HTTP %{http_code}\n" \
+            -X POST "$PACT_BROKER_BASE_URL/provider-contracts/provider/identity-service/publish" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/openapi-publish-payload.json
+
+      - name: Stop identity-service (OpenAPI publish instance)
+        if: always()
+        run: kill "$(cat "$GITHUB_WORKSPACE/identity-openapi.pid")" 2>/dev/null || true
+
+      # The test itself boots its own, separate real identity-service
+      # process (see IdentityServiceProviderVerificationTests.cs's
+      # StartService) — nothing further to start here. WithPactBrokerSource
+      # has no consumer filter, so this one run verifies both consumers'
+      # pacts.
       - name: Verify provider against every published contract
         env:
           PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
