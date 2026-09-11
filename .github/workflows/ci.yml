@@ -226,6 +226,23 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @pacts/frontend-identity-service.json
 
+      # Same fix as pact-consumer-catalog's identical step: without this,
+      # "Can I Deploy?" (and any /matrix query by branch, including the
+      # can-i-deploy CD gate) reports "No version of frontend from branch
+      # stage exists" — confirmed directly against the broker, not assumed.
+      # Branches and tags are genuinely separate resources here; only this
+      # branches/{branch}/versions/{v} form populates _embedded.branchVersions.
+      - name: Record consumer version's branch
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf -o /dev/null -w "branch recorded: HTTP %{http_code}\n" \
+            -X PUT "$PACT_BROKER_BASE_URL/pacticipants/frontend/branches/${{ github.ref_name }}/versions/${{ github.sha }}" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+
       - name: Install metrics dependencies
         if: always()
         working-directory: scripts/metrics
