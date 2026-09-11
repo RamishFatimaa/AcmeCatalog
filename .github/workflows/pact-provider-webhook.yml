@@ -1,0 +1,69 @@
+name: Pact provider verification (PactFlow webhook)
+
+# Receives an external trigger from a PactFlow webhook (see the
+# documentation block in this session's final report for the exact
+# external PactFlow configuration this still requires — it cannot be
+# configured from inside this repository). Reuses the exact same
+# reusable-pact-provider.yml the main ci.yml run calls, so verification
+# behaves identically regardless of which trigger fired it; this workflow
+# adds nothing except payload validation and identity plumbing.
+#
+# repository_dispatch payloads are attacker-shaped even when the caller is
+# authenticated (a compromised or misconfigured PactFlow webhook, or a
+# broken template, could send anything) — every field is validated below
+# BEFORE it touches a shell command, and only ever passed onward through
+# `with:`/`env:` values, never concatenated into a `run:` string.
+on:
+  repository_dispatch:
+    types: [pact-verification-requested]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-payload:
+    runs-on: ubuntu-latest
+    outputs:
+      safe: ${{ steps.check.outputs.safe }}
+      provider-version: ${{ steps.check.outputs.provider_version }}
+      provider-branch: ${{ steps.check.outputs.provider_branch }}
+    steps:
+      - name: Validate webhook payload
+        id: check
+        env:
+          PAYLOAD_PROVIDER: ${{ github.event.client_payload.provider }}
+          PAYLOAD_VERSION: ${{ github.event.client_payload.providerVersion }}
+          PAYLOAD_BRANCH: ${{ github.event.client_payload.providerBranch }}
+        run: |
+          # Read only via env: above — never interpolate ${{ }} expressions
+          # directly into this script, which is the actual shell-injection
+          # vector this guards against.
+          if [ "$PAYLOAD_PROVIDER" != "identity-service" ]; then
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+            echo "::error::unexpected provider '$PAYLOAD_PROVIDER' in webhook payload — refusing to run"
+            exit 0
+          fi
+          if ! printf '%s' "$PAYLOAD_VERSION" | grep -qE '^[0-9a-f]{7,40}$'; then
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+            echo "::error::providerVersion '$PAYLOAD_VERSION' is not a plausible git SHA — refusing to run"
+            exit 0
+          fi
+          if ! printf '%s' "$PAYLOAD_BRANCH" | grep -qE '^[A-Za-z0-9._/-]{1,100}$'; then
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+            echo "::error::providerBranch '$PAYLOAD_BRANCH' contains unexpected characters — refusing to run"
+            exit 0
+          fi
+          echo "safe=true" >> "$GITHUB_OUTPUT"
+          echo "provider_version=$PAYLOAD_VERSION" >> "$GITHUB_OUTPUT"
+          echo "provider_branch=$PAYLOAD_BRANCH" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: validate-payload
+    if: needs.validate-payload.outputs.safe == 'true'
+    uses: ./.github/workflows/reusable-pact-provider.yml
+    with:
+      version-sha: ${{ needs.validate-payload.outputs.provider-version }}
+      branch-name: ${{ needs.validate-payload.outputs.provider-branch }}
+      checkout-ref: ${{ needs.validate-payload.outputs.provider-version }}
+      metrics-job-name: pact-provider-verify-webhook
+    secrets: inherit

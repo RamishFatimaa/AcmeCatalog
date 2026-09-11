@@ -29,6 +29,7 @@ namespace CatalogService.Tests;
 // identity-service issues, the same way IdentityClientResilienceTests.cs
 // already stands in for identity-service at the HTTP layer elsewhere.
 [TestFixture]
+[Category("Integration")]
 public class ItemsApiTests
 {
     private WebApplicationFactory<Program> _factory = null!;

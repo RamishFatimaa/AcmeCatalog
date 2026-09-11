@@ -157,7 +157,11 @@ function rowsFromCypressResults(resultsDir) {
 
 // ---- .NET source: TRX (NUnit, no retries — always exactly one attempt) ----
 
-const BACKEND_UNIT_CLASSES = new Set(['ItemEnricherTests'])
+// Kept in sync with the real [Category("Unit")] attributes added to the
+// test source (ItemEnricherTests.cs, ItemServiceTests.cs) — this script's
+// own class-name heuristic doesn't read NUnit categories from the TRX, so
+// it needs the same class list maintained by hand here.
+const BACKEND_UNIT_CLASSES = new Set(['ItemEnricherTests', 'ItemServiceTests'])
 
 // Both real consumer/provider Pact test classes — lumping these into
 // 'backend-integration' would blur the exact distinction this dashboard

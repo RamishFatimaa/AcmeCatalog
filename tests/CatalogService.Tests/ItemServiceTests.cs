@@ -5,6 +5,17 @@ using Microsoft.EntityFrameworkCore;
 
 namespace CatalogService.Tests;
 
+// Project convention, decided explicitly rather than defaulted: EF Core's
+// UseInMemoryDatabase provider is treated as Unit here, not Integration —
+// it's not a real database engine (no SQL dialect, no file/network I/O,
+// fully in-process), unlike ItemsApiTests.cs/AuthApiTests.cs, which use a
+// real SQLite file via WebApplicationFactory and are Integration. This
+// class instantiates ItemService directly against that in-memory context,
+// the same "construct the real class under test" shape as
+// ItemEnricherTests.cs's Moq-based tests, just with a real DbContext
+// instead of a mocked collaborator.
+[TestFixture]
+[Category("Unit")]
 public class ItemServiceTests
 {
     private CatalogDbContext _context = null!;

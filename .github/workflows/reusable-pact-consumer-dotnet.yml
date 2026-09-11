@@ -1,0 +1,110 @@
+name: Reusable — Pact consumer (.NET)
+
+# One caller today (pact-consumer-catalog in ci.yml), factored out anyway
+# per the target architecture: this is a complete, cohesive operation
+# (run the Pact test, publish the resulting contract, record its branch),
+# not just a test runner — and the whole point of extracting it is that a
+# future catalog-service-cd.yml (or any other .NET consumer added later)
+# can call it too without copying these steps.
+
+on:
+  workflow_call:
+    inputs:
+      test-project:
+        required: true
+        type: string
+        description: 'Path to the consumer test .csproj, e.g. tests/CatalogService.Tests/CatalogService.Tests.csproj'
+      pacticipant:
+        required: true
+        type: string
+        description: 'This consumer''s real Pacticipant name in PactFlow, e.g. catalog-service'
+      provider:
+        required: true
+        type: string
+        description: 'The provider Pacticipant name, e.g. identity-service'
+      pact-file-path:
+        required: true
+        type: string
+        description: 'Path to the pact JSON PactNet writes, e.g. pacts/catalog-service-identity-service.json'
+      version-sha:
+        required: true
+        type: string
+        description: 'Real commit SHA to publish under — the PR head SHA on a pull_request event, github.sha otherwise, never a merge SHA'
+      branch-name:
+        required: true
+        type: string
+        description: 'Real branch name to record — the PR head ref on a pull_request event, github.ref_name otherwise, never refs/pull/N/merge'
+      metrics-job-name:
+        required: true
+        type: string
+    secrets:
+      PACT_BROKER_BASE_URL:
+        required: true
+      PACT_BROKER_TOKEN:
+        required: true
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.test-project }}
+
+      - name: Run consumer Pact test
+        run: >
+          dotnet test ${{ inputs.test-project }}
+          --filter "TestCategory=Pact"
+          --logger "trx"
+          --results-directory ./TestResults
+
+      - name: Publish pact to PactFlow
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf -o /dev/null -w "published: HTTP %{http_code}\n" \
+            -X PUT "$PACT_BROKER_BASE_URL/pacts/provider/${{ inputs.provider }}/consumer/${{ inputs.pacticipant }}/version/${{ inputs.version-sha }}" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @${{ inputs.pact-file-path }}
+
+      # Branches and tags are genuinely separate resources on this broker
+      # (confirmed directly: PUT .../tags/{tag} creates a tag, leaves
+      # _embedded.branchVersions empty; this branches/{branch}/versions/{v}
+      # form is the one that actually populates it, which is what
+      # can-i-deploy and any /matrix query by branch actually reads).
+      - name: Record consumer version's branch
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf -o /dev/null -w "branch recorded: HTTP %{http_code}\n" \
+            -X PUT "$PACT_BROKER_BASE_URL/pacticipants/${{ inputs.pacticipant }}/branches/${{ inputs.branch-name }}/versions/${{ inputs.version-sha }}" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{}'
+
+      - name: Publish test metrics
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: ./.github/actions/publish-test-metrics
+        with:
+          mode: dotnet
+          results-path: ../../TestResults
+          job-name: ${{ inputs.metrics-job-name }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}

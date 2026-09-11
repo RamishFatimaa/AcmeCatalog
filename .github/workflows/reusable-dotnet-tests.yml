@@ -1,0 +1,85 @@
+name: Reusable — .NET test run
+
+# Used twice today (unit-tests, integration-tests), both against the whole
+# solution — the filter is what selects the right subset from whichever
+# project actually has tests in that category, not a per-project split.
+# A third caller (Pact) deliberately does NOT use this: pact-consumer-
+# catalog/pact-provider-verify each need extra steps (publish, boot a real
+# service) a plain filtered test run doesn't cover — see
+# reusable-pact-consumer-dotnet.yml / reusable-pact-provider.yml instead.
+
+on:
+  workflow_call:
+    inputs:
+      test-filter:
+        required: true
+        type: string
+        description: 'NUnit TestCategory value to select, e.g. Unit or Integration'
+      job-display-name:
+        required: true
+        type: string
+        description: 'Used for the artifact name, the dorny/test-reporter check name, and METRICS_JOB_NAME'
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore AcmeCatalog.slnx
+
+      - name: Build
+        run: dotnet build AcmeCatalog.slnx --no-restore --configuration Release
+
+      - name: Run ${{ inputs.job-display-name }} tests
+        run: >
+          dotnet test AcmeCatalog.slnx
+          --no-build --configuration Release
+          --filter "TestCategory=${{ inputs.test-filter }}"
+          --logger "trx"
+          --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.job-display-name }}-results
+          path: TestResults/
+
+      - name: Publish test report
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: ${{ inputs.job-display-name }} (NUnit)
+          path: 'TestResults/*.trx'
+          reporter: dotnet-trx
+
+      # Fork PRs never receive repo secrets, so Azure OIDC login inside the
+      # composite action below would fail on an empty client-id and turn an
+      # otherwise-green test job red over an optional metrics push — never
+      # what a required check should do. Push/workflow_dispatch/same-repo
+      # PRs are unaffected; only a fork PR's pull_request event trips this.
+      - name: Publish test metrics
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: ./.github/actions/publish-test-metrics
+        with:
+          mode: dotnet
+          results-path: ../../TestResults
+          job-name: ${{ inputs.job-display-name }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}

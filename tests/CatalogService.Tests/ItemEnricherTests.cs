@@ -10,6 +10,7 @@ namespace CatalogService.Tests;
 // this codebase settled on for its Cypress suite this session, now applied
 // to a backend seam for the first time.
 [TestFixture]
+[Category("Unit")]
 public class ItemEnricherTests
 {
     private Mock<IIdentityClient> _identityClient = null!;

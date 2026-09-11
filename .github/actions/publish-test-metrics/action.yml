@@ -1,0 +1,69 @@
+name: 'Publish test metrics'
+description: >
+  Pushes one job's real test results (TRX, Cypress attempts JSON, or Vitest
+  JSON) into the quality-metrics pipeline (Azure Table Storage behind the
+  live dashboard). Deliberately never fails the calling job on its own —
+  push-test-metrics.mjs already catches its own errors internally and only
+  emits a ::warning:: annotation, by design (metrics must never mask a real
+  test result). Extracted from the same 4-step block (Setup Node, npm ci,
+  Azure OIDC login, node push-test-metrics.mjs) previously copy-pasted at
+  every job in ci.yml.
+
+  Fork-PR safety is the CALLER's responsibility, not this action's: Azure
+  OIDC login has no identity to assume on a fork PR (repo secrets aren't
+  exposed there), so callers must guard the step that `uses:` this action
+  with a condition excluding fork PRs — see reusable-dotnet-tests.yml for
+  the exact expression. This action does not add that guard itself so it
+  stays a plain, unconditional composite: what to skip and when is a
+  workflow-level policy decision, not something to bury in a shared action.
+
+inputs:
+  mode:
+    required: true
+    description: 'dotnet | cypress | vitest — passed straight through to push-test-metrics.mjs'
+  results-path:
+    required: true
+    description: 'Path to the TRX directory, Cypress results directory, or Vitest JSON file, relative to scripts/metrics'
+  job-name:
+    required: true
+    description: 'Value for METRICS_JOB_NAME'
+  matrix-index:
+    required: false
+    default: '0'
+    description: 'Value for METRICS_MATRIX_INDEX (e.g. browser-container for e2e-smoke, container for e2e-regression)'
+  azure-client-id:
+    required: true
+  azure-tenant-id:
+    required: true
+  azure-subscription-id:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: scripts/metrics/package-lock.json
+
+    - name: Install metrics dependencies
+      shell: bash
+      working-directory: scripts/metrics
+      run: npm ci
+
+    - name: Azure login (OIDC)
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Push test metrics
+      shell: bash
+      working-directory: scripts/metrics
+      env:
+        METRICS_JOB_NAME: ${{ inputs.job-name }}
+        METRICS_MATRIX_INDEX: ${{ inputs.matrix-index }}
+      run: node push-test-metrics.mjs ${{ inputs.mode }} ${{ inputs.results-path }}

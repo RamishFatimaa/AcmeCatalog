@@ -12,6 +12,7 @@ namespace IdentityService.Tests;
 // SQLite file via WebApplicationFactory<Program> — the same shape of test
 // api/*.cy.ts already uses on the frontend against a real running backend.
 [TestFixture]
+[Category("Integration")]
 public class AuthApiTests
 {
     private WebApplicationFactory<Program> _factory = null!;

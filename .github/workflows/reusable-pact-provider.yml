@@ -1,0 +1,143 @@
+name: Reusable — Pact provider verification (identity-service)
+
+# One caller in ci.yml today, plus the webhook receiver
+# (pact-provider-webhook.yml) — this is exactly the "same provider-
+# verification implementation" both need, per the instruction not to fork
+# the logic between the two trigger paths.
+#
+# IdentityServiceProviderVerificationTests.cs reads GITHUB_SHA/
+# GITHUB_REF_NAME directly from the environment (not from CI-passed
+# inputs) to know what version/branch to publish verification results
+# under. On a pull_request event those ambient runner env vars are the
+# synthetic merge commit/ref, not the real PR head — exactly the mistake
+# the version-sha/branch-name inputs below exist to prevent. Rather than
+# touch the test file, the "Verify provider" step's own env: block shadows
+# GITHUB_SHA/GITHUB_REF_NAME for just that one process with the corrected
+# values — standard, safe env-var shadowing, not a workaround.
+
+on:
+  workflow_call:
+    inputs:
+      version-sha:
+        required: true
+        type: string
+        description: 'Real commit SHA identity-service is being verified at — the PR head SHA on a pull_request event, github.sha otherwise'
+      branch-name:
+        required: true
+        type: string
+        description: 'Real branch name to publish verification results under'
+      checkout-ref:
+        required: false
+        type: string
+        default: ''
+        description: 'Explicit ref/SHA to check out — used by the webhook receiver to verify the exact provider version PactFlow requested. Empty means "check out whatever triggered this workflow" (the normal ci.yml case).'
+      metrics-job-name:
+        required: true
+        type: string
+    secrets:
+      PACT_BROKER_BASE_URL:
+        required: true
+      PACT_BROKER_TOKEN:
+        required: true
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.checkout-ref != '' && inputs.checkout-ref || github.sha }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore tests/IdentityService.Tests/IdentityService.Tests.csproj
+
+      - name: Build identity-service
+        run: dotnet build services/identity-service/IdentityService.csproj --configuration Release
+
+      # Bidirectional contract testing's other half, alongside the classic
+      # consumer/provider Pact verification below: publishing identity-
+      # service's REAL, live OpenAPI document as a provider contract lets
+      # PactFlow cross-check it against every consumer's pact directly —
+      # PactFlow runs that comparison itself once both sides are published,
+      # nothing to run on this side beyond publishing. Boots its own short-
+      # lived instance rather than reusing the Pact verifier's (that one
+      # only lives inside the test process below, torn down before this
+      # step could ever reach it).
+      - name: Start identity-service (for OpenAPI contract publish)
+        id: start-openapi
+        uses: ./.github/actions/start-dotnet-service
+        with:
+          project-path: services/identity-service
+          url: http://localhost:5701
+          log-name: identity-openapi.log
+
+      - name: Publish identity-service OpenAPI provider contract
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+        run: |
+          curl -sf http://localhost:5701/swagger/v1/swagger.json -o /tmp/identity-openapi.json
+          python3 -c "
+          import json, base64
+          content = open('/tmp/identity-openapi.json', 'rb').read()
+          payload = {
+              'pacticipantVersionNumber': '${{ inputs.version-sha }}',
+              'branch': '${{ inputs.branch-name }}',
+              'contract': {
+                  'content': base64.b64encode(content).decode(),
+                  'contentType': 'application/json',
+                  'specification': 'oas',
+              },
+          }
+          json.dump(payload, open('/tmp/openapi-publish-payload.json', 'w'))
+          "
+          curl -sf -w "\nopenapi contract published: HTTP %{http_code}\n" \
+            -X POST "$PACT_BROKER_BASE_URL/provider-contracts/provider/identity-service/publish" \
+            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/openapi-publish-payload.json
+
+      - name: Stop identity-service (OpenAPI publish instance)
+        if: always()
+        run: kill "${{ steps.start-openapi.outputs.pid }}" 2>/dev/null || true
+
+      # The test itself boots its own, separate real identity-service
+      # process (see IdentityServiceProviderVerificationTests.cs's
+      # StartService) — nothing further to start here. WithPactBrokerSource
+      # has no consumer filter, so this one run dynamically fetches and
+      # verifies every consumer's published contract; it does not need a
+      # separate job per consumer.
+      - name: Verify provider against every published contract
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+          GITHUB_SHA: ${{ inputs.version-sha }}
+          GITHUB_REF_NAME: ${{ inputs.branch-name }}
+        run: >
+          dotnet test tests/IdentityService.Tests/IdentityService.Tests.csproj
+          --filter "TestCategory=Pact"
+          --logger "trx"
+          --results-directory ./TestResults
+
+      - name: Publish test metrics
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: ./.github/actions/publish-test-metrics
+        with:
+          mode: dotnet
+          results-path: ../../TestResults
+          job-name: ${{ inputs.metrics-job-name }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}

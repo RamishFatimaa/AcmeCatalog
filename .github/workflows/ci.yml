@@ -1,5 +1,14 @@
 name: CI
 
+# The single system-level orchestration workflow — every quality-gate job
+# stays in this one file/one github.run_id on purpose, per an explicit
+# decision to keep timing/dashboard data deterministic rather than have
+# push-job-timing.mjs try to reassemble state across independent workflow
+# runs (real race conditions, rerun ambiguity, and PR merge-SHA problems
+# that way — rejected for exactly those reasons). Shared implementations
+# live in the reusable-*.yml workflows and .github/actions/* composite
+# actions this file calls; this file itself stays a thin sequence of
+# `needs:` edges expressing the actual gate order.
 on:
   push:
   pull_request:
@@ -7,381 +16,32 @@ on:
 
 permissions:
   contents: read
-  checks: write
-  pull-requests: write
-  id-token: write
 
 env:
   METRICS_STORAGE_ACCOUNT: acmecatalogmetrics
 
 jobs:
-  backend-tests:
-    runs-on: ubuntu-latest
+  # Stage 1
+  unit-tests:
+    permissions:
+      contents: read
+      checks: write
+      id-token: write
+    uses: ./.github/workflows/reusable-dotnet-tests.yml
+    with:
+      test-filter: Unit
+      job-display-name: backend-unit-tests
+    secrets: inherit
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Restore
-        run: dotnet restore AcmeCatalog.slnx
-
-      - name: Build
-        run: dotnet build AcmeCatalog.slnx --no-restore --configuration Release
-
-      # Covers both services in one run: IdentityService.Tests
-      # (WebApplicationFactory-based, real ASP.NET Identity stack against a
-      # throwaway SQLite file per test) and CatalogService.Tests (Moq for
-      # ItemEnricher's own logic, WireMock.Net for the actual
-      # AddIdentityServiceClient resilience pipeline — timeout, retry, and
-      # circuit-breaker behavior against real elapsed time, not a mocked
-      # clock).
-      # No fixed LogFileName: AcmeCatalog.slnx runs two test projects in this
-      # one invocation, and a fixed name meant the second project's TRX
-      # silently overwrote the first's in ./TestResults — dorny/test-reporter
-      # below was only ever reporting CatalogService.Tests' results, never
-      # IdentityService.Tests'. Letting dotnet auto-name each project's file
-      # (it includes the assembly name) fixes both this step's glob and the
-      # metrics push below.
-      # TestCategory!=Pact excludes IdentityClientPactTests and
-      # InternalUsersPactVerificationTests — they need PACT_BROKER_*
-      # secrets (and the provider one boots a real identity-service
-      # process itself), so they run in their own dedicated jobs below
-      # instead of here.
-      - name: Run backend tests
-        run: >
-          dotnet test AcmeCatalog.slnx
-          --no-build --configuration Release
-          --filter "TestCategory!=Pact"
-          --logger "trx"
-          --results-directory ./TestResults
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-test-results
-          path: TestResults/
-
-      - name: Publish test report
-        if: always()
-        uses: dorny/test-reporter@v1
-        with:
-          name: Backend Tests (NUnit)
-          path: 'TestResults/*.trx'
-          reporter: dotnet-trx
-
-      # Feeds the quality dashboard (scripts/metrics) — its own small
-      # package, not frontend/, so this job doesn't need the React/Cypress
-      # toolchain installed just to push 43 rows of test results.
-      - name: Setup Node
-        if: always()
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: scripts/metrics/package-lock.json
-
-      - name: Install metrics dependencies
-        if: always()
-        working-directory: scripts/metrics
-        run: npm ci
-
-      - name: Azure login (OIDC)
-        if: always()
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Push test metrics
-        if: always()
-        working-directory: scripts/metrics
-        env:
-          METRICS_JOB_NAME: backend-tests
-        run: node push-test-metrics.mjs dotnet ../../TestResults
-
-  # Real contracts against identity-service, from both its real consumers —
-  # catalog-service's server-to-server call (/internal/users) and the
-  # frontend's own login call. See PROJECT.md's "known gaps" section,
-  # IdentityClientPactTests.cs, and pact/auth.consumer.pact.test.ts. Each
-  # consumer publishes independently (Pact's mock server is local,
-  # in-process, needs nothing else); the one provider-verify job needs
-  # both published first, so it depends on both explicitly.
-  pact-consumer-catalog:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Restore
-        run: dotnet restore tests/CatalogService.Tests/CatalogService.Tests.csproj
-
-      - name: Run consumer Pact test
-        run: >
-          dotnet test tests/CatalogService.Tests/CatalogService.Tests.csproj
-          --filter "TestCategory=Pact"
-          --logger "trx"
-          --results-directory ./TestResults
-
-      - name: Publish pact to PactFlow
-        env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
-          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
-        run: |
-          curl -sf -o /dev/null -w "published: HTTP %{http_code}\n" \
-            -X PUT "$PACT_BROKER_BASE_URL/pacts/provider/identity-service/consumer/catalog-service/version/${{ github.sha }}" \
-            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @pacts/catalog-service-identity-service.json
-
-      # Without this, "Can I Deploy?" has a real, published version but no
-      # branch to find it by — confirmed directly against the broker's own
-      # UI ("no versions exist for that branch") before this was added.
-      # Branches and tags are genuinely separate resources on this broker
-      # (confirmed directly: PUT .../tags/{tag} creates a tag, leaves
-      # _embedded.branchVersions empty; this branches/{branch}/versions/{v}
-      # form is the one that actually populates it) — not interchangeable
-      # naming for the same thing.
-      - name: Record consumer version's branch
-        env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
-          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
-        run: |
-          curl -sf -o /dev/null -w "branch recorded: HTTP %{http_code}\n" \
-            -X PUT "$PACT_BROKER_BASE_URL/pacticipants/catalog-service/branches/${{ github.ref_name }}/versions/${{ github.sha }}" \
-            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{}'
-
-      - name: Setup Node
-        if: always()
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: scripts/metrics/package-lock.json
-
-      - name: Install metrics dependencies
-        if: always()
-        working-directory: scripts/metrics
-        run: npm ci
-
-      - name: Azure login (OIDC)
-        if: always()
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Push test metrics
-        if: always()
-        working-directory: scripts/metrics
-        env:
-          METRICS_JOB_NAME: pact-consumer-catalog
-        run: node push-test-metrics.mjs dotnet ../../TestResults
-
-  pact-consumer-frontend:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Run consumer Pact test
-        working-directory: frontend
-        run: npx vitest run --reporter=json --outputFile=vitest-report.json
-
-      - name: Publish pact to PactFlow
-        env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
-          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
-        run: |
-          curl -sf -o /dev/null -w "published: HTTP %{http_code}\n" \
-            -X PUT "$PACT_BROKER_BASE_URL/pacts/provider/identity-service/consumer/frontend/version/${{ github.sha }}" \
-            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @pacts/frontend-identity-service.json
-
-      # Same fix as pact-consumer-catalog's identical step: without this,
-      # "Can I Deploy?" (and any /matrix query by branch, including the
-      # can-i-deploy CD gate) reports "No version of frontend from branch
-      # stage exists" — confirmed directly against the broker, not assumed.
-      # Branches and tags are genuinely separate resources here; only this
-      # branches/{branch}/versions/{v} form populates _embedded.branchVersions.
-      - name: Record consumer version's branch
-        env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
-          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
-        run: |
-          curl -sf -o /dev/null -w "branch recorded: HTTP %{http_code}\n" \
-            -X PUT "$PACT_BROKER_BASE_URL/pacticipants/frontend/branches/${{ github.ref_name }}/versions/${{ github.sha }}" \
-            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{}'
-
-      - name: Install metrics dependencies
-        if: always()
-        working-directory: scripts/metrics
-        run: npm ci
-
-      - name: Azure login (OIDC)
-        if: always()
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Push test metrics
-        if: always()
-        working-directory: scripts/metrics
-        env:
-          METRICS_JOB_NAME: pact-consumer-frontend
-        run: node push-test-metrics.mjs vitest ../../frontend/vitest-report.json
-
-  pact-provider-verify:
-    runs-on: ubuntu-latest
-    needs: [pact-consumer-catalog, pact-consumer-frontend]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Restore
-        run: dotnet restore tests/IdentityService.Tests/IdentityService.Tests.csproj
-
-      - name: Build identity-service
-        run: dotnet build services/identity-service/IdentityService.csproj --configuration Release
-
-      # Bidirectional contract testing's other half, alongside the classic
-      # consumer/provider Pact verification below: publishing identity-
-      # service's REAL, live OpenAPI document (Swashbuckle-generated, same
-      # one openapi-schema.cy.ts already validates live responses against)
-      # as a provider contract lets PactFlow cross-check it against every
-      # consumer's pact directly — no test run required on the provider
-      # side for this comparison, since it's a schema diff PactFlow runs
-      # itself once both sides are published. Boots its own short-lived
-      # instance rather than reusing the Pact verifier's (that one only
-      # lives inside the test process below, torn down before this step
-      # could ever reach it).
-      - name: Start identity-service (for OpenAPI contract publish)
-        working-directory: services/identity-service
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-        run: |
-          nohup dotnet run --no-build --configuration Release --urls http://localhost:5701 > "$GITHUB_WORKSPACE/identity-openapi.log" 2>&1 &
-          echo $! > "$GITHUB_WORKSPACE/identity-openapi.pid"
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5701/health > /dev/null; then echo "identity-service is up"; exit 0; fi
-            sleep 1
-          done
-          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity-openapi.log"; exit 1
-
-      - name: Publish identity-service OpenAPI provider contract
-        env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
-          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
-        run: |
-          curl -sf http://localhost:5701/swagger/v1/swagger.json -o /tmp/identity-openapi.json
-          python3 -c "
-          import json, base64
-          content = open('/tmp/identity-openapi.json', 'rb').read()
-          payload = {
-              'pacticipantVersionNumber': '${{ github.sha }}',
-              'branch': '${{ github.ref_name }}',
-              'contract': {
-                  'content': base64.b64encode(content).decode(),
-                  'contentType': 'application/json',
-                  'specification': 'oas',
-              },
-          }
-          json.dump(payload, open('/tmp/openapi-publish-payload.json', 'w'))
-          "
-          curl -sf -w "\nopenapi contract published: HTTP %{http_code}\n" \
-            -X POST "$PACT_BROKER_BASE_URL/provider-contracts/provider/identity-service/publish" \
-            -H "Authorization: Bearer $PACT_BROKER_TOKEN" \
-            -H "Content-Type: application/json" \
-            --data-binary @/tmp/openapi-publish-payload.json
-
-      - name: Stop identity-service (OpenAPI publish instance)
-        if: always()
-        run: kill "$(cat "$GITHUB_WORKSPACE/identity-openapi.pid")" 2>/dev/null || true
-
-      # The test itself boots its own, separate real identity-service
-      # process (see IdentityServiceProviderVerificationTests.cs's
-      # StartService) — nothing further to start here. WithPactBrokerSource
-      # has no consumer filter, so this one run verifies both consumers'
-      # pacts.
-      - name: Verify provider against every published contract
-        env:
-          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
-          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
-        run: >
-          dotnet test tests/IdentityService.Tests/IdentityService.Tests.csproj
-          --filter "TestCategory=Pact"
-          --logger "trx"
-          --results-directory ./TestResults
-
-      - name: Setup Node
-        if: always()
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: scripts/metrics/package-lock.json
-
-      - name: Install metrics dependencies
-        if: always()
-        working-directory: scripts/metrics
-        run: npm ci
-
-      - name: Azure login (OIDC)
-        if: always()
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Push test metrics
-        if: always()
-        working-directory: scripts/metrics
-        env:
-          METRICS_JOB_NAME: pact-provider-verify
-        run: node push-test-metrics.mjs dotnet ../../TestResults
-
+  # Stage 2 — component, integration, and both consumer Pact jobs all run
+  # in parallel once unit-tests passes; none of the four has a real
+  # technical dependency on any other.
   component-tests:
+    needs: unit-tests
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -398,9 +58,7 @@ jobs:
         run: npm ci
 
       # No backend involved at all — components mount in isolation with the
-      # app's real CSS (see cypress/support/component.ts), which is the
-      # whole point: a backdrop-click test here was passing by accident of
-      # unstyled layout until that import existed.
+      # app's real CSS (see cypress/support/component.ts).
       - name: Run Component Tests
         uses: cypress-io/github-action@v6
         with:
@@ -412,241 +70,167 @@ jobs:
           COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
 
-      - name: Install metrics dependencies
+      - name: Upload Cypress evidence
         if: always()
-        working-directory: scripts/metrics
-        run: npm ci
-
-      - name: Azure login (OIDC)
-        if: always()
-        uses: azure/login@v2
+        uses: actions/upload-artifact@v4
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          name: component-tests
+          path: |
+            frontend/cypress/screenshots
+            frontend/cypress/videos
+            frontend/cypress/results
+          if-no-files-found: ignore
 
-      - name: Push test metrics
-        if: always()
-        working-directory: scripts/metrics
-        env:
-          METRICS_JOB_NAME: component-tests
-        run: node push-test-metrics.mjs cypress ../../frontend/cypress/results
+      - name: Publish test metrics
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: ./.github/actions/publish-test-metrics
+        with:
+          mode: cypress
+          results-path: ../../frontend/cypress/results
+          job-name: component-tests
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-  # Both backend services + the real Vite dev server, health-checked before
-  # Cypress ever runs — this is exactly the manual sequence used to verify
-  # the split locally, just automated. e2e-smoke and e2e-regression share
-  # this setup as a reusable job via the composite steps below.
+  integration-tests:
+    needs: unit-tests
+    permissions:
+      contents: read
+      checks: write
+      id-token: write
+    uses: ./.github/workflows/reusable-dotnet-tests.yml
+    with:
+      test-filter: Integration
+      job-display-name: backend-integration-tests
+    secrets: inherit
+
+  # catalog-service is the Pact CONSUMER here — it knows what it requires
+  # from identity-service and owns publishing that expectation.
+  pact-consumer-catalog:
+    needs: unit-tests
+    permissions:
+      contents: read
+      checks: write
+      id-token: write
+    uses: ./.github/workflows/reusable-pact-consumer-dotnet.yml
+    with:
+      test-project: tests/CatalogService.Tests/CatalogService.Tests.csproj
+      pacticipant: catalog-service
+      provider: identity-service
+      pact-file-path: pacts/catalog-service-identity-service.json
+      # Real PR head identity, never the synthetic merge SHA/ref a bare
+      # github.sha/github.ref_name would read on a pull_request event.
+      version-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      branch-name: ${{ github.head_ref || github.ref_name }}
+      metrics-job-name: pact-consumer-catalog
+    secrets: inherit
+
+  # frontend is the other Pact CONSUMER — same ownership reasoning.
+  pact-consumer-frontend:
+    needs: unit-tests
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/reusable-pact-consumer-node.yml
+    with:
+      pacticipant: frontend
+      provider: identity-service
+      pact-file-path: pacts/frontend-identity-service.json
+      version-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      branch-name: ${{ github.head_ref || github.ref_name }}
+      metrics-job-name: pact-consumer-frontend
+    secrets: inherit
+
+  # Stage 3 — identity-service is the Pact PROVIDER for both consumers
+  # above; WithPactBrokerSource has no consumer filter, so this one job
+  # dynamically fetches and verifies every relevant contract rather than
+  # needing one hard-coded job per consumer. Waits for both because
+  # verifying against a pact that hasn't been published yet would just be
+  # verifying stale state.
+  pact-provider-verify:
+    needs: [pact-consumer-catalog, pact-consumer-frontend]
+    permissions:
+      contents: read
+      checks: write
+      id-token: write
+    uses: ./.github/workflows/reusable-pact-provider.yml
+    with:
+      version-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+      branch-name: ${{ github.head_ref || github.ref_name }}
+      metrics-job-name: pact-provider-verify
+    secrets: inherit
+
+  # Stage 4 — the system-level E2E smoke suite starts the fully integrated
+  # app (identity + catalog + frontend) and needs every middle-layer gate
+  # to have already passed: component and integration tests prove each
+  # piece works in isolation, provider verification proves the real
+  # inter-service contract holds, before spending the time booting all
+  # three together for real.
   e2e-smoke:
-    runs-on: ubuntu-latest
+    needs: [component-tests, integration-tests, pact-provider-verify]
     strategy:
       fail-fast: false
       matrix:
         # Every spec in this repo has only ever run in Cypress's bundled
-        # Electron — grepped confirmed zero --browser usage anywhere before
-        # this. Firefox goes on e2e-smoke only (not e2e-regression, which
-        # already triples the container count) via cypress-io/github-action's
-        # own `browser:` input below — one extra job, not a second full
-        # matrix, since this is a real-browser sanity check, not a second
-        # copy of the whole regression suite. Distinct ci-build-id/group
-        # per browser below so Cypress Cloud's parallel load-balancer never
-        # mixes a 2-machine Electron run with a 1-machine Firefox one.
+        # Electron. Firefox goes on smoke only (not regression, which
+        # already triples the container count) as a real-browser sanity
+        # check, not a second full suite copy.
         browser: [electron]
         containers: [1, 2]
         include:
           - browser: firefox
             containers: 1
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/reusable-cypress-e2e.yml
+    with:
+      # ci-build-id groups matrix workers into one Cypress Cloud run so it
+      # can load-balance spec files across them. Both Electron workers
+      # share this exact string (matrix.containers isn't part of it);
+      # Firefox's browser value makes its string different on purpose, so
+      # it never joins the Electron group. run_attempt is included so a
+      # manual re-run of this workflow can't collide with the original
+      # attempt's build id.
+      cypress-command: npm run e2e:smoke -- --record --parallel --ci-build-id ${{ github.run_id }}-${{ github.run_attempt }}-smoke-${{ matrix.browser }} --group e2e-smoke-${{ matrix.browser }}
+      browser: ${{ matrix.browser }}
+      artifact-name: e2e-smoke-${{ matrix.browser }}-${{ matrix.containers }}
+      metrics-job-name: e2e-smoke
+      metrics-matrix-index: ${{ matrix.browser }}-${{ matrix.containers }}
+    secrets: inherit
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build backend
-        run: dotnet build AcmeCatalog.slnx --configuration Release
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Start identity-service
-        working-directory: services/identity-service
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-        run: |
-          nohup dotnet run --no-build --configuration Release --urls http://localhost:5301 > "$GITHUB_WORKSPACE/identity.log" 2>&1 &
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5301/health > /dev/null; then echo "identity-service is up"; exit 0; fi
-            sleep 1
-          done
-          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity.log"; exit 1
-
-      - name: Start catalog-service
-        working-directory: services/catalog-service
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-          Services__IdentityServiceBaseUrl: http://localhost:5301
-        run: |
-          nohup dotnet run --no-build --configuration Release --urls http://localhost:5302 > "$GITHUB_WORKSPACE/catalog.log" 2>&1 &
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5302/health > /dev/null; then echo "catalog-service is up"; exit 0; fi
-            sleep 1
-          done
-          echo "catalog-service failed to start"; cat "$GITHUB_WORKSPACE/catalog.log"; exit 1
-
-      # cypress-io/github-action spawns `start:` directly, not through a
-      # shell — inline VAR=value syntax there silently fails to locate the
-      # executable, a real bug this project hit once already. The frontend
-      # doesn't need one here: .env.development already points it at
-      # :5301/:5302, matching the ports started above.
-      # record/key as `with:` inputs only compose into the action's own
-      # invocation when it builds the `cypress run` command itself — once
-      # `command:` is a custom override (needed here for the smoke tag
-      # filter), that composition doesn't reliably happen. Appending
-      # --record directly and exporting CYPRESS_RECORD_KEY as a plain env
-      # var is what Cypress's CLI actually reads, regardless of the action's
-      # own flag-building.
-      # --ci-build-id groups these matrix jobs into one Cypress Cloud run so
-      # it can load-balance individual spec files across them; without it
-      # (the state this was in before) each matrix job just ran the entire
-      # @smoke suite on its own, twice over, for zero speedup. It's suffixed
-      # -smoke so this group never collides with e2e-regression's build id
-      # further down, even though both derive from the same run_id.
-      - name: Run E2E smoke suite
-        uses: cypress-io/github-action@v6
-        with:
-          working-directory: frontend
-          install: false
-          start: npm run dev
-          wait-on: 'http://localhost:5173'
-          wait-on-timeout: 90
-          browser: ${{ matrix.browser }}
-          command: npm run e2e:smoke -- --record --parallel --ci-build-id ${{ github.run_id }}-smoke-${{ matrix.browser }} --group e2e-smoke-${{ matrix.browser }}
-        env:
-          COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
-          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
-
-      - name: Install metrics dependencies
-        if: always()
-        working-directory: scripts/metrics
-        run: npm ci
-
-      - name: Azure login (OIDC)
-        if: always()
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Push test metrics
-        if: always()
-        working-directory: scripts/metrics
-        env:
-          METRICS_JOB_NAME: e2e-smoke
-          METRICS_MATRIX_INDEX: ${{ matrix.browser }}-${{ matrix.containers }}
-        run: node push-test-metrics.mjs cypress ../../frontend/cypress/results
-
+  # Stage 5 — regression only after smoke passes, and only on stage: it's
+  # the full suite, not a sanity check, and not worth the time on every
+  # push/PR.
   e2e-regression:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/stage'
+    needs: e2e-smoke
+    # A custom `if:` on a job with `needs:` REPLACES GitHub's implicit
+    # success()-of-all-needs check, it doesn't add to it — found by
+    # deliberately checking this rather than assuming. Without success()
+    # here, this job would run on every push to stage regardless of
+    # whether e2e-smoke failed, silently violating "smoke failure ->
+    # regression does not start."
+    if: success() && github.ref == 'refs/heads/stage'
     strategy:
       fail-fast: false
       matrix:
         containers: [1, 2, 3]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/reusable-cypress-e2e.yml
+    with:
+      # All three containers share this exact string (matrix.containers
+      # isn't part of it) so Cypress Cloud treats them as one parallel run.
+      cypress-command: npm run e2e:regression -- --record --parallel --ci-build-id ${{ github.run_id }}-${{ github.run_attempt }}-regression --group e2e-regression
+      artifact-name: e2e-regression-${{ matrix.containers }}
+      metrics-job-name: e2e-regression
+      metrics-matrix-index: ${{ matrix.containers }}
+    secrets: inherit
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Build backend
-        run: dotnet build AcmeCatalog.slnx --configuration Release
-
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Start identity-service
-        working-directory: services/identity-service
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-        run: |
-          nohup dotnet run --no-build --configuration Release --urls http://localhost:5301 > "$GITHUB_WORKSPACE/identity.log" 2>&1 &
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5301/health > /dev/null; then echo "identity-service is up"; exit 0; fi
-            sleep 1
-          done
-          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity.log"; exit 1
-
-      - name: Start catalog-service
-        working-directory: services/catalog-service
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-          Services__IdentityServiceBaseUrl: http://localhost:5301
-        run: |
-          nohup dotnet run --no-build --configuration Release --urls http://localhost:5302 > "$GITHUB_WORKSPACE/catalog.log" 2>&1 &
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5302/health > /dev/null; then echo "catalog-service is up"; exit 0; fi
-            sleep 1
-          done
-          echo "catalog-service failed to start"; cat "$GITHUB_WORKSPACE/catalog.log"; exit 1
-
-      - name: Run E2E regression suite
-        uses: cypress-io/github-action@v6
-        with:
-          working-directory: frontend
-          install: false
-          start: npm run dev
-          wait-on: 'http://localhost:5173'
-          wait-on-timeout: 90
-          command: npm run e2e:regression -- --record --parallel --ci-build-id ${{ github.run_id }}-regression --group e2e-regression
-        env:
-          COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
-          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
-
-      - name: Install metrics dependencies
-        if: always()
-        working-directory: scripts/metrics
-        run: npm ci
-
-      - name: Azure login (OIDC)
-        if: always()
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Push test metrics
-        if: always()
-        working-directory: scripts/metrics
-        env:
-          METRICS_JOB_NAME: e2e-regression
-          METRICS_MATRIX_INDEX: ${{ matrix.containers }}
-        run: node push-test-metrics.mjs cypress ../../frontend/cypress/results
-
+  # Intentionally non-gating (continue-on-error) and intentionally absent
+  # from every needs: list below — must never be required by service
+  # validation, E2E, CD, timing, or dashboard publication.
   ai-prompt-demo:
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -675,33 +259,20 @@ jobs:
         run: npm ci
 
       - name: Start identity-service
-        working-directory: services/identity-service
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-        run: |
-          nohup dotnet run --no-build --configuration Release --urls http://localhost:5301 > "$GITHUB_WORKSPACE/identity.log" 2>&1 &
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5301/health > /dev/null; then echo "identity-service is up"; exit 0; fi
-            sleep 1
-          done
-          echo "identity-service failed to start"; cat "$GITHUB_WORKSPACE/identity.log"; exit 1
+        uses: ./.github/actions/start-dotnet-service
+        with:
+          project-path: services/identity-service
+          url: http://localhost:5301
+          log-name: identity.log
 
       - name: Start catalog-service
-        working-directory: services/catalog-service
-        env:
-          ASPNETCORE_ENVIRONMENT: Development
-          Services__IdentityServiceBaseUrl: http://localhost:5301
-        run: |
-          nohup dotnet run --no-build --configuration Release --urls http://localhost:5302 > "$GITHUB_WORKSPACE/catalog.log" 2>&1 &
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:5302/health > /dev/null; then echo "catalog-service is up"; exit 0; fi
-            sleep 1
-          done
-          echo "catalog-service failed to start"; cat "$GITHUB_WORKSPACE/catalog.log"; exit 1
+        uses: ./.github/actions/start-dotnet-service
+        with:
+          project-path: services/catalog-service
+          url: http://localhost:5302
+          log-name: catalog.log
+          extra-env: Services__IdentityServiceBaseUrl=http://localhost:5301
 
-      # e2e:ai-demo already has --record baked into its own package.json
-      # script — just needs the key available as the env var Cypress's CLI
-      # actually reads, same reasoning as the smoke/regression jobs above.
       - name: Run cy.prompt() demo
         uses: cypress-io/github-action@v6
         with:
@@ -714,17 +285,16 @@ jobs:
         env:
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
 
-  # Sourced from the GitHub Actions API itself, after every gating job has
-  # finished, rather than each job self-reporting its own timing — the API
-  # already has exact runner-perspective start/end for every job *and* every
-  # step (including the "Start identity-service"/"Start catalog-service"
-  # health-check steps), which is what lets the dashboard split real test
-  # execution from boot/health-check dead time without touching those bash
-  # curl loops at all. Deliberately excludes ai-prompt-demo — non-gating,
-  # not part of the suite-health story.
+  # Stage 6 — sourced from the GitHub Actions API itself for this exact
+  # github.run_id, which is what gives record-job-timing (and the
+  # dashboard's critical-path view) an exact, deterministic relationship
+  # between every job/step in the run above. Deliberately does not search
+  # other workflow runs. !cancelled() (not just always()) so a cancelled
+  # run doesn't still spend time computing and publishing timing data for
+  # work that was deliberately aborted.
   record-job-timing:
-    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression, pact-consumer-catalog, pact-consumer-frontend, pact-provider-verify]
-    if: always()
+    needs: [unit-tests, component-tests, integration-tests, pact-consumer-catalog, pact-consumer-frontend, pact-provider-verify, e2e-smoke, e2e-regression]
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -758,16 +328,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node push-job-timing.mjs
 
-  # Regenerates the 5-page quality dashboard from whatever's now in Azure
-  # Table Storage (including this run's own just-pushed rows) and deploys it
-  # to its own dedicated Static Web App — separate from the frontend's,
-  # deliberately: this redeploys on every push/PR, not just stage, and
-  # Azure/static-web-apps-deploy@v1 replaces an app's whole deployed content
-  # per deploy, so sharing one app with the frontend would mean every CI run
-  # here also re-deploys (or races) the production React app.
+  # Stage 7 — regenerates the 6-page quality dashboard from whatever's now
+  # in Azure Table Storage (including this run's own just-pushed rows).
+  # Runs after timing collection, not in parallel with it, since the
+  # dashboard's own job-timing view reads what record-job-timing just
+  # wrote. !cancelled() for the same reason as above — a cancelled run
+  # should not publish a dashboard update.
   publish-dashboard:
-    needs: [backend-tests, component-tests, e2e-smoke, e2e-regression, pact-consumer-catalog, pact-consumer-frontend, pact-provider-verify, record-job-timing]
-    if: always()
+    needs: record-job-timing
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -801,9 +370,7 @@ jobs:
 
       # With skip_app_build:true the action doesn't apply output_location as
       # a subfolder of app_location the way it does after a real build step —
-      # it just looks for index.html directly in app_location. Found by the
-      # first real deploy attempt failing "Failed to find a default file";
-      # fix is pointing app_location straight at the already-generated dist/.
+      # it just looks for index.html directly in app_location.
       - name: Deploy dashboard
         uses: Azure/static-web-apps-deploy@v1
         with:

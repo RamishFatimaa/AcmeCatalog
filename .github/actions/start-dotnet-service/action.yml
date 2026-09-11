@@ -1,0 +1,62 @@
+name: 'Start a real .NET service and wait for /health'
+description: >
+  Boots a service with `dotnet run --no-build`, redirects its output to a
+  log file under GITHUB_WORKSPACE, and polls its real /health endpoint
+  (both services register AddDbContextCheck, so this genuinely proves the
+  DB is reachable, not just that the process exists) before returning.
+  Extracted from what was previously the same ~10-line nohup+curl-poll
+  block copy-pasted at every call site (e2e-smoke, e2e-regression,
+  ai-prompt-demo x2 each, plus the OpenAPI-publish step) — one definition
+  now, same behavior everywhere it's used.
+
+inputs:
+  project-path:
+    required: true
+    description: 'Path to the service project, e.g. services/identity-service'
+  url:
+    required: true
+    description: 'Base URL to run and health-check the service on, e.g. http://localhost:5301'
+  log-name:
+    required: true
+    description: 'Filename (written under $GITHUB_WORKSPACE) to redirect the service''s stdout/stderr to'
+  extra-env:
+    required: false
+    default: ''
+    description: >
+      Optional newline-separated KEY=VALUE pairs to export before starting
+      the service, e.g. catalog-service's Services__IdentityServiceBaseUrl.
+      Neither service overrides ConnectionStrings__DefaultConnection here
+      (unlike the C# test classes, which each use their own throwaway
+      per-run file) — preserved exactly as today's behavior: both use
+      whatever appsettings.Development.json already points at.
+
+outputs:
+  pid:
+    description: 'PID of the started dotnet process, in case the caller wants to stop it explicitly'
+    value: ${{ steps.start.outputs.pid }}
+
+runs:
+  using: composite
+  steps:
+    - id: start
+      shell: bash
+      run: |
+        export ASPNETCORE_ENVIRONMENT=Development
+        if [ -n "${{ inputs.extra-env }}" ]; then
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            export "$line"
+          done <<< "${{ inputs.extra-env }}"
+        fi
+        nohup dotnet run --no-build --configuration Release --project "${{ inputs.project-path }}" --urls "${{ inputs.url }}" > "$GITHUB_WORKSPACE/${{ inputs.log-name }}" 2>&1 &
+        echo "pid=$!" >> "$GITHUB_OUTPUT"
+        for i in $(seq 1 60); do
+          if curl -sf "${{ inputs.url }}/health" > /dev/null; then
+            echo "${{ inputs.project-path }} is up"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "${{ inputs.project-path }} failed to start"
+        cat "$GITHUB_WORKSPACE/${{ inputs.log-name }}"
+        exit 1

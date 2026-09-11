@@ -1,0 +1,127 @@
+name: Reusable — Cypress system E2E run
+
+# Two real callers (e2e-smoke, e2e-regression) with ~90 lines of previously
+# identical setup between them (build backend, start both real services,
+# health-check, run Cypress, push metrics) — the highest-value extraction
+# in this refactor. The caller keeps its own `strategy: matrix:` (fully
+# valid alongside a job-level `uses:`) and passes the already-computed
+# per-worker command/build-id/group through `with:`.
+
+on:
+  workflow_call:
+    inputs:
+      cypress-command:
+        required: true
+        type: string
+        description: 'Full npm script invocation, e.g. "npm run e2e:smoke -- --record --parallel --ci-build-id ... --group ..."'
+      browser:
+        required: false
+        type: string
+        default: electron
+      artifact-name:
+        required: true
+        type: string
+        description: 'Must be unique per matrix worker, e.g. e2e-smoke-electron-1'
+      metrics-job-name:
+        required: true
+        type: string
+      metrics-matrix-index:
+        required: true
+        type: string
+    secrets:
+      CYPRESS_RECORD_KEY:
+        required: true
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build backend
+        run: dotnet build AcmeCatalog.slnx --configuration Release
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Start identity-service
+        uses: ./.github/actions/start-dotnet-service
+        with:
+          project-path: services/identity-service
+          url: http://localhost:5301
+          log-name: identity.log
+
+      - name: Start catalog-service
+        uses: ./.github/actions/start-dotnet-service
+        with:
+          project-path: services/catalog-service
+          url: http://localhost:5302
+          log-name: catalog.log
+          extra-env: Services__IdentityServiceBaseUrl=http://localhost:5301
+
+      # cypress-io/github-action spawns `start:` directly, not through a
+      # shell — inline VAR=value syntax there silently fails to locate the
+      # executable. The frontend doesn't need one here: .env.development
+      # already points it at :5301/:5302, matching the ports started above.
+      # record/key as `with:` inputs only compose into the action's own
+      # invocation when it builds the `cypress run` command itself — once
+      # `command:` is a custom override, that composition doesn't reliably
+      # happen, so --record is appended directly in the caller's command
+      # string and CYPRESS_RECORD_KEY is exported as a plain env var
+      # instead, which Cypress's CLI actually reads regardless.
+      - name: Run Cypress
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: frontend
+          install: false
+          start: npm run dev
+          wait-on: 'http://localhost:5173'
+          wait-on-timeout: 90
+          browser: ${{ inputs.browser }}
+          command: ${{ inputs.cypress-command }}
+        env:
+          COMMIT_INFO_MESSAGE: ${{ github.event.head_commit.message }}
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+      - name: Upload Cypress evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: |
+            frontend/cypress/screenshots
+            frontend/cypress/videos
+            frontend/cypress/results
+          if-no-files-found: ignore
+
+      - name: Publish test metrics
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: ./.github/actions/publish-test-metrics
+        with:
+          mode: cypress
+          results-path: ../../frontend/cypress/results
+          job-name: ${{ inputs.metrics-job-name }}
+          matrix-index: ${{ inputs.metrics-matrix-index }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}

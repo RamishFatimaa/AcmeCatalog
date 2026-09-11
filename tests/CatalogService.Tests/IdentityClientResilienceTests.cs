@@ -16,6 +16,7 @@ namespace CatalogService.Tests;
 // fakes for the clock, because the thing under test is whether these
 // policies behave correctly against real elapsed time.
 [TestFixture]
+[Category("Integration")]
 public class IdentityClientResilienceTests
 {
     private WireMockServer _server = null!;

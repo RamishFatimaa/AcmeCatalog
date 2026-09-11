@@ -21,6 +21,7 @@ namespace IntegrationTests;
 // these two services silently breaking, independent of the frontend ever
 // touching it.
 [TestFixture]
+[Category("Integration")]
 public class CatalogIdentityIntegrationTests
 {
     private const string IdentityUrl = "http://localhost:5501";
